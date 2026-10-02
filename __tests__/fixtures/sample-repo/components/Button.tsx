@@ -1,3 +1,4 @@
+// @ts-nocheck
 // A React component with alias import and dynamic import
 import { Item } from '@/lib/types';
 
