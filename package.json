@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "jest --config jest.config.ts --no-coverage",
+    "test:coverage": "jest --config jest.config.ts --coverage"
   },
   "dependencies": {
     "@clerk/backend": "^3.22.0",
@@ -20,12 +22,16 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
+    "jest": "^30.5.2",
+    "jest-environment-node": "^30.5.2",
     "tailwindcss": "^4",
+    "ts-jest": "^29.4.14",
     "typescript": "^5"
   },
   "packageManager": "pnpm@11.7.0"
