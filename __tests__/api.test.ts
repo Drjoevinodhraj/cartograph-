@@ -121,7 +121,7 @@ import { POST as postExplain } from '@/app/api/analyses/[id]/explain/route';
 
 // Pull the Clerk mock so tests can change auth state.
 import { auth as clerkAuth } from '@clerk/nextjs/server';
-const mockAuth = clerkAuth as jest.Mock;
+const mockAuth = clerkAuth as unknown as jest.Mock;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
