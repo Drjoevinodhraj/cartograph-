@@ -21,11 +21,12 @@ export type DependencyGraphProps = {
   }>
   edges: Array<{
     from: string
-    to: string
+    to: string | null
     type: 'import' | 'dynamic' | 'unresolved'
   }>
   onSelectFile?: (filePath: string) => void
   selectedFile?: string | null
+  layout?: 'hierarchical' | 'force-directed'
 }
 
 const NODE_WIDTH = 150
@@ -132,7 +133,7 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
   // Convert edges to React Flow edges
   const initialEdges: Edge[] = useMemo(() => {
     return edges
-      .filter(e => e.type !== 'unresolved' && e.to)
+      .filter((e): e is typeof edges[number] & { to: string } => e.type !== 'unresolved' && e.to !== null)
       .map(edge => {
         let strokeColor: string
         if (edge.from === selectedFile) {

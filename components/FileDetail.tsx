@@ -13,7 +13,7 @@ interface FileDetailProps {
     in: string[];
     out: string[];
   };
-  onLoadExplanation?: (filePath: string) => Promise<string>;
+  onLoadExplanation?: (filePath: string) => Promise<void>;
   explanation?: string | null;
   isLoadingExplanation?: boolean;
 }
