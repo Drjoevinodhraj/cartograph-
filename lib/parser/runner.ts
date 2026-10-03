@@ -14,6 +14,8 @@ import { createClient } from '@supabase/supabase-js';
 
 import { parseRepository } from '@/lib/parser';
 import type { Coverage, File as RepoFile, Edge } from '@/lib/parser';
+import { fetchReviewsForRepo } from '@/lib/coderabbit/client';
+import { storeReviews } from '@/lib/coderabbit/storage';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -107,6 +109,71 @@ function reasonsToRecord(reasons: Map<string, number>): Record<string, number> {
   return record;
 }
 
+/**
+ * Fetch CodeRabbit API key for an organization from the database.
+ * Non-fatal: returns null if key not found or query fails.
+ *
+ * @param orgId - Organization ID
+ * @returns CodeRabbit API key or null if not configured
+ */
+async function getOrganizationCodeRabbitKey(orgId: string): Promise<string | null> {
+  try {
+    const supabase = makeSupabaseClient();
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('coderabbit_api_key')
+      .eq('id', orgId)
+      .single();
+
+    if (error) {
+      console.warn('[runner] Failed to fetch organization CodeRabbit API key:', error.message);
+      return null;
+    }
+
+    return data?.coderabbit_api_key || null;
+  } catch (err) {
+    console.warn('[runner] Error querying CodeRabbit key:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Fetch CodeRabbit reviews asynchronously (fire-and-forget).
+ * This runs after the analysis response is returned, so any delays here don't block the user.
+ * Implements 30-second timeout via Promise.race().
+ *
+ * @param repoUrl - Repository URL
+ * @param orgId - Organization ID
+ * @param repoId - Repository ID
+ * @param apiKey - CodeRabbit API key
+ */
+function fetchReviewsAsync(
+  repoUrl: string,
+  orgId: string,
+  repoId: string,
+  apiKey: string,
+): void {
+  // Fire-and-forget: don't await, let it run in background
+  Promise.race([
+    fetchReviewsForRepo(repoUrl, apiKey)
+      .then((reviews) => {
+        if (reviews.length > 0) {
+          return storeReviews(orgId, repoId, reviews);
+        }
+      })
+      .catch((error) => {
+        console.warn('[runner] Failed to fetch CodeRabbit reviews:', error instanceof Error ? error.message : String(error));
+      }),
+    new Promise<void>((_, reject) =>
+      setTimeout(() => reject(new Error('CodeRabbit timeout')), 30000)
+    ),
+  ]).catch((error) => {
+    console.warn('[runner] CodeRabbit review fetch timed out or failed:', error instanceof Error ? error.message : String(error));
+    // Don't fail analysis on CodeRabbit errors — this is non-blocking
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -118,8 +185,9 @@ function reasonsToRecord(reasons: Map<string, number>): Record<string, number> {
  * 2. Clones the repo into a temp directory.
  * 3. Runs the Phase 2 parser over the clone.
  * 4. Stores the results in Supabase (repositories + analysis_results).
- * 5. Cleans up the temp clone.
- * 6. Returns an Analysis summary.
+ * 5. Triggers CodeRabbit review fetch asynchronously (non-blocking).
+ * 6. Cleans up the temp clone.
+ * 7. Returns an Analysis summary.
  */
 export async function analyzeRepository(
   repoUrl: string,
@@ -248,6 +316,19 @@ export async function analyzeRepository(
       );
     }
 
+    // 5. Trigger CodeRabbit review fetch asynchronously (fire-and-forget)
+    // This happens after analysis is stored, so we can return to the user immediately
+    if (organizationId && repositoryId) {
+      const coderabbitApiKey = await getOrganizationCodeRabbitKey(organizationId);
+      
+      if (coderabbitApiKey) {
+        // Fire and forget: start the async fetch but don't await it
+        fetchReviewsAsync(repoUrl, organizationId, repositoryId, coderabbitApiKey);
+      } else {
+        console.debug('[runner] No CodeRabbit API key configured for organization');
+      }
+    }
+
     return {
       id: analysisRow.id as string,
       organizationId,
@@ -262,7 +343,7 @@ export async function analyzeRepository(
       createdAt: new Date(analysisRow.created_at as string),
     };
   } finally {
-    // 5. Cleanup — always runs, even on error
+    // 6. Cleanup — always runs, even on error
     await cleanupDir(tmpDir);
   }
 }
