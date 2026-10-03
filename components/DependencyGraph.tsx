@@ -10,9 +10,12 @@ import ReactFlow, {
   type Edge,
   type OnNodesChange,
   type OnEdgesChange,
+  Handle,
+  Position,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import dagre from 'dagre'
+import type { ReviewData } from '@/lib/coderabbit/types'
 
 export type DependencyGraphProps = {
   files: Array<{
@@ -27,6 +30,7 @@ export type DependencyGraphProps = {
   onSelectFile?: (filePath: string) => void
   selectedFile?: string | null
   layout?: 'hierarchical' | 'force-directed'
+  reviews?: Map<string, ReviewData>
 }
 
 const NODE_WIDTH = 150
@@ -42,6 +46,64 @@ function getColorByKind(kind: string): string {
   }
   return colors[kind] ?? colors['other'] ?? '#9ca3af'
 }
+
+function getBadgeColorByStatus(status: string): string {
+  const colors: Record<string, string> = {
+    'approved': '#22c55e',    // green
+    'needs-review': '#eab308', // yellow
+    'issues': '#ef4444',       // red
+    'not-reviewed': '#9ca3af', // gray
+  }
+  return colors[status] ?? colors['not-reviewed']
+}
+
+// Custom node component with review badge
+const CustomNode = React.memo(
+  ({ data, id, selected }: any) => {
+    const review = data.review as ReviewData | undefined
+    const badgeColor = review ? getBadgeColorByStatus(review.reviewStatus) : undefined
+    const tooltipText = review
+      ? `Review: ${review.reviewStatus} (${review.commentCount} comments)`
+      : 'Review: not-reviewed (0 comments)'
+
+    return (
+      <div
+        className="node-wrapper"
+        title={tooltipText}
+        style={{ position: 'relative', width: '100%', height: '100%' }}
+      >
+        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {data.label}
+        </div>
+        {badgeColor && (
+          <div
+            data-testid={`review-badge-${id}`}
+            style={{
+              position: 'absolute',
+              bottom: '-8px',
+              right: '-8px',
+              width: '18px',
+              height: '18px',
+              borderRadius: '50%',
+              backgroundColor: badgeColor,
+              border: '2px solid white',
+              cursor: 'pointer',
+              zIndex: 10,
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              data.onSelectFile?.(id)
+            }}
+          />
+        )}
+        <Handle position={Position.Top} type="target" />
+        <Handle position={Position.Bottom} type="source" />
+      </div>
+    )
+  }
+)
+
+CustomNode.displayName = 'CustomNode'
 
 function applyDagreLayout(
   nodes: Node[],
@@ -82,6 +144,7 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
   edges,
   onSelectFile,
   selectedFile,
+  reviews = new Map(),
 }) => {
   // Build a set of neighbors (files that selectedFile imports or is imported by)
   const neighborSet = useMemo<Set<string>>(() => {
@@ -114,8 +177,13 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
   const initialNodes: Node[] = useMemo(() => {
     return files.map(file => ({
       id: file.path,
-      data: { label: file.path.split('/').pop() ?? file.path },
+      data: {
+        label: file.path.split('/').pop() ?? file.path,
+        review: reviews.get(file.path),
+        onSelectFile,
+      },
       position: { x: 0, y: 0 }, // overwritten by Dagre
+      type: 'default',
       style: {
         background: getColorByKind(file.kind),
         color: '#fff',
@@ -126,9 +194,11 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
         border: file.path === selectedFile ? '2px solid #fff' : '2px solid transparent',
         opacity: selectedFile && file.path !== selectedFile && !neighborSet.has(file.path) ? 0.45 : 1,
         cursor: 'pointer',
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
       },
     }))
-  }, [files, selectedFile, neighborSet])
+  }, [files, selectedFile, neighborSet, reviews, onSelectFile])
 
   // Convert edges to React Flow edges
   const initialEdges: Edge[] = useMemo(() => {
@@ -186,6 +256,8 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
     [onSelectFile],
   )
 
+  const nodeTypes = useMemo(() => ({ default: CustomNode }), [])
+
   return (
     <div style={{ width: '100%', height: '100%', minHeight: '400px' }}>
       <ReactFlow
@@ -194,6 +266,7 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
         onNodesChange={onNodesChange as OnNodesChange}
         onEdgesChange={onEdgesChange as OnEdgesChange}
         onNodeClick={onNodeClick}
+        nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
