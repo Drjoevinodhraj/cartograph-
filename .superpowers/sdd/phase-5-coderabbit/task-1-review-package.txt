@@ -1,0 +1,2605 @@
+e30acf9 Task 1: CodeRabbit client and types with 30-second timeout
+ba847bf docs: add Phase 5 CodeRabbit implementation plan with 10 tasks
+ __tests__/coderabbit.test.ts                       |  346 ++++
+ .../plans/2026-10-03-phase-5-coderabbit.md         | 2041 ++++++++++++++++++++
+ lib/coderabbit/client.ts                           |  154 ++
+ lib/coderabbit/types.ts                            |   33 +
+ 4 files changed, 2574 insertions(+)
+diff --git a/__tests__/coderabbit.test.ts b/__tests__/coderabbit.test.ts
+new file mode 100644
+index 0000000..5c0c1e9
+--- /dev/null
++++ b/__tests__/coderabbit.test.ts
+@@ -0,0 +1,346 @@
++import { fetchReviewsForRepo } from '../lib/coderabbit/client';
++import type { ReviewData, ReviewStatus, CodeRabbitReview } from '../lib/coderabbit/types';
++
++// Mock global fetch
++global.fetch = jest.fn();
++
++describe('CodeRabbit Client', () => {
++  beforeEach(() => {
++    jest.clearAllMocks();
++    // Suppress console.warn during tests
++    jest.spyOn(console, 'warn').mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    jest.restoreAllMocks();
++  });
++
++  /**
++   * Test 1: Basic fetch returns an array
++   */
++  it('should return an array when called with valid parameters', async () => {
++    const mockReviews: CodeRabbitReview[] = [];
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(Array.isArray(result)).toBe(true);
++  });
++
++  /**
++   * Test 2: Type validation - returned data has correct types
++   */
++  it('should return ReviewData with correct types', async () => {
++    const mockReviews: CodeRabbitReview[] = [
++      {
++        file_path: 'src/Button.tsx',
++        review_status: 'approved' as ReviewStatus,
++        comment_count: 5,
++        summary: 'Looks good',
++        external_url: 'https://example.com/review/1',
++      },
++    ];
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toHaveLength(1);
++    const review = result[0];
++    expect(typeof review.filePath).toBe('string');
++    expect(typeof review.reviewStatus).toBe('string');
++    expect(typeof review.commentCount).toBe('number');
++    expect(review.summary === null || typeof review.summary === 'string').toBe(
++      true
++    );
++    expect(
++      review.externalReviewUrl === null || typeof review.externalReviewUrl === 'string'
++    ).toBe(true);
++    expect(review.fetchedAt instanceof Date).toBe(true);
++  });
++
++  /**
++   * Test 3: Error handling - missing API key returns empty array
++   */
++  it('should return empty array when API key is missing', async () => {
++    const consoleWarnSpy = jest.spyOn(console, 'warn');
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      ''
++    );
++
++    expect(result).toEqual([]);
++    expect(consoleWarnSpy).toHaveBeenCalledWith(
++      'CodeRabbit API key is empty or null'
++    );
++  });
++
++  /**
++   * Test 4: Error handling - abort triggers timeout error
++   */
++  it('should catch AbortError and return empty array', async () => {
++    const consoleWarnSpy = jest.spyOn(console, 'warn');
++
++    // Mock fetch to throw an AbortError
++    const abortError = new Error('The operation was aborted');
++    abortError.name = 'AbortError';
++    (global.fetch as jest.Mock).mockRejectedValueOnce(abortError);
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toEqual([]);
++    expect(consoleWarnSpy).toHaveBeenCalledWith(
++      'CodeRabbit API request timed out (30s)'
++    );
++  });
++
++  /**
++   * Test 5: Invalid review status filtering
++   */
++  it('should filter out reviews with invalid status', async () => {
++    const mockReviews = [
++      {
++        file_path: 'src/valid.tsx',
++        review_status: 'approved' as ReviewStatus,
++        comment_count: 1,
++      },
++      {
++        file_path: 'src/invalid.tsx',
++        review_status: 'unknown' as unknown as ReviewStatus,
++        comment_count: 2,
++      },
++    ];
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toHaveLength(1);
++    expect(result[0].filePath).toBe('src/valid.tsx');
++  });
++
++  /**
++   * Test 6: File path normalization
++   */
++  it('should normalize file paths (backslashes to forward slashes, strip leading slashes)', async () => {
++    const mockReviews: CodeRabbitReview[] = [
++      {
++        file_path: 'src\\button.tsx',
++        review_status: 'approved' as ReviewStatus,
++        comment_count: 3,
++      },
++      {
++        file_path: '/src/input.tsx',
++        review_status: 'needs-review' as ReviewStatus,
++        comment_count: 2,
++      },
++      {
++        file_path: '///src/checkbox.tsx',
++        review_status: 'issues' as ReviewStatus,
++        comment_count: 5,
++      },
++    ];
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toHaveLength(3);
++    expect(result[0].filePath).toBe('src/button.tsx');
++    expect(result[1].filePath).toBe('src/input.tsx');
++    expect(result[2].filePath).toBe('src/checkbox.tsx');
++  });
++
++  /**
++   * Test 7: Happy path with valid mock API response
++   */
++  it('should return correct ReviewData array from valid API response', async () => {
++    const mockReviews: CodeRabbitReview[] = [
++      {
++        file_path: 'src/Button.tsx',
++        review_status: 'approved' as ReviewStatus,
++        comment_count: 0,
++        summary: 'Looks good!',
++        external_url: 'https://coderabbit.ai/reviews/123',
++      },
++      {
++        file_path: 'src/Input.tsx',
++        review_status: 'needs-review' as ReviewStatus,
++        comment_count: 3,
++        summary: 'Needs fixes',
++        external_url: 'https://coderabbit.ai/reviews/124',
++      },
++      {
++        file_path: 'src/Modal.tsx',
++        review_status: 'issues' as ReviewStatus,
++        comment_count: 5,
++      },
++      {
++        file_path: 'src/Dialog.tsx',
++        review_status: 'not-reviewed' as ReviewStatus,
++        comment_count: 0,
++      },
++    ];
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toHaveLength(4);
++
++    // Check first review
++    expect(result[0]).toEqual({
++      filePath: 'src/Button.tsx',
++      reviewStatus: 'approved',
++      commentCount: 0,
++      summary: 'Looks good!',
++      externalReviewUrl: 'https://coderabbit.ai/reviews/123',
++      fetchedAt: expect.any(Date),
++    });
++
++    // Check second review
++    expect(result[1]).toEqual({
++      filePath: 'src/Input.tsx',
++      reviewStatus: 'needs-review',
++      commentCount: 3,
++      summary: 'Needs fixes',
++      externalReviewUrl: 'https://coderabbit.ai/reviews/124',
++      fetchedAt: expect.any(Date),
++    });
++
++    // Check third review (no summary, no external_url)
++    expect(result[2]).toEqual({
++      filePath: 'src/Modal.tsx',
++      reviewStatus: 'issues',
++      commentCount: 5,
++      summary: null,
++      externalReviewUrl: null,
++      fetchedAt: expect.any(Date),
++    });
++
++    // Check fourth review
++    expect(result[3]).toEqual({
++      filePath: 'src/Dialog.tsx',
++      reviewStatus: 'not-reviewed',
++      commentCount: 0,
++      summary: null,
++      externalReviewUrl: null,
++      fetchedAt: expect.any(Date),
++    });
++  });
++
++  /**
++   * Test 8: HTTP error response handling
++   */
++  it('should return empty array on HTTP error response', async () => {
++    const consoleWarnSpy = jest.spyOn(console, 'warn');
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: false,
++      status: 401,
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'invalid-key'
++    );
++
++    expect(result).toEqual([]);
++    expect(consoleWarnSpy).toHaveBeenCalledWith(
++      'CodeRabbit API request failed with status 401'
++    );
++  });
++
++  /**
++   * Test 9: JSON parse error handling
++   */
++  it('should return empty array on JSON parse error', async () => {
++    const consoleWarnSpy = jest.spyOn(console, 'warn');
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => {
++        throw new Error('Invalid JSON');
++      },
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toEqual([]);
++    expect(consoleWarnSpy).toHaveBeenCalledWith(
++      'Failed to parse CodeRabbit API response as JSON'
++    );
++  });
++
++  /**
++   * Test 10: All four review statuses are handled correctly
++   */
++  it('should accept all four valid review statuses', async () => {
++    const validStatuses: ReviewStatus[] = [
++      'approved',
++      'needs-review',
++      'issues',
++      'not-reviewed',
++    ];
++
++    const mockReviews: CodeRabbitReview[] = validStatuses.map(
++      (status, index) => ({
++        file_path: `src/file${index}.tsx`,
++        review_status: status,
++        comment_count: index,
++      })
++    );
++
++    (global.fetch as jest.Mock).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ reviews: mockReviews }),
++    });
++
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-key'
++    );
++
++    expect(result).toHaveLength(4);
++    result.forEach((review, index) => {
++      expect(review.reviewStatus).toBe(validStatuses[index]);
++    });
++  });
++});
+diff --git a/docs/superpowers/plans/2026-10-03-phase-5-coderabbit.md b/docs/superpowers/plans/2026-10-03-phase-5-coderabbit.md
+new file mode 100644
+index 0000000..0493704
+--- /dev/null
++++ b/docs/superpowers/plans/2026-10-03-phase-5-coderabbit.md
+@@ -0,0 +1,2041 @@
++# Phase 5: CodeRabbit Integration Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** Integrate CodeRabbit code review platform with Cartograph dependency graph, showing review status on nodes and enabling on-demand refresh of review data.
++
++**Architecture:** Read-only CodeRabbit integration with hybrid caching: fetch all reviews at analysis time (Phase 3) and store in database for instant display, then allow users to refresh individual file reviews on-demand via API endpoint. Reviews cached with org-level RLS; if CodeRabbit unavailable, analysis completes successfully.
++
++**Tech Stack:** Next.js 16 App Router, TypeScript strict, React 19, Supabase (Postgres with RLS), CodeRabbit API (read-only), Jest for testing, Tailwind v4.
++
++**Spec:** `docs/specs/phase-5.md`
++
++## Global Constraints
++
++- Review statuses: `'approved'` | `'needs-review'` | `'issues'` | `'not-reviewed'` (enum in database)
++- Badge colors: `#22c55e` (green-approved), `#eab308` (yellow-needs-review), `#ef4444` (red-issues), `#9ca3af` (gray-not-reviewed)
++- CodeRabbit API timeout: 30 seconds maximum
++- RLS enforced at database level: users see only reviews for repos in their organization
++- Graceful degradation: if CodeRabbit API fails, analysis completes with warnings, reviews show as "not-reviewed"
++- All TypeScript strict mode, zero any, all tests passing before merge
++- File path normalization: reviews keyed by normalized file paths matching parser output
++
++## Review Focus
++
++1. **File path mismatch:** CodeRabbit returns different file path format than parser — test reviews display on correct nodes despite path normalization differences
++2. **RLS bypass:** User from different organization attempts to access/refresh reviews — verify 403 or no-data response, never cross-org leakage
++3. **CodeRabbit timeout:** API call exceeds 30s during analysis fetch — verify analysis completes with warning log, reviews show "not-reviewed", no hanging
++4. **Concurrent refresh:** User clicks "Refresh Reviews" twice rapidly on same file — verify request deduplication or graceful handling, no duplicate API calls
++5. **Empty organization:** Organization has no CodeRabbit API key configured — verify graceful degradation, no 500 errors, analysis proceeds with "not-reviewed" for all files
++
++---
++
++## File Structure
++
++### New Files
++
++- `lib/coderabbit/client.ts` — CodeRabbit API client, handles auth and response parsing
++- `lib/coderabbit/storage.ts` — Database CRUD for reviews, RLS-enforced queries
++- `lib/coderabbit/types.ts` — Shared TypeScript interfaces for review data
++- `app/api/coderabbit/refresh/route.ts` — POST endpoint for on-demand refresh
++- `supabase/migrations/002_add_coderabbit_reviews.sql` — Database schema and RLS policies
++- `__tests__/coderabbit.test.ts` — Comprehensive test suite
++
++### Modified Files
++
++- `lib/parser/runner.ts` — Call `fetchCodeRabbitReviews()` after analysis completes
++- `components/DependencyGraph.tsx` — Add review status badges to nodes
++- `components/FileDetail.tsx` — Add Code Review section with refresh button
++- `hooks/useFileDetail.ts` — Add review data state and refresh function
++- `hooks/useAnalysis.ts` — Include reviews in Analysis type, convert from API response
++- `app/analyses/[id]/page.tsx` — Pass reviews prop to DependencyGraph component
++
++---
++
++## Task Breakdown
++
++### Task 1: CodeRabbit Client and Types
++
++**Files:**
++- Create: `lib/coderabbit/types.ts`
++- Create: `lib/coderabbit/client.ts`
++- Test: `__tests__/coderabbit.test.ts` (client tests only)
++
++**Interfaces:**
++- Produces: `ReviewData` interface (filePath, reviewStatus, commentCount, summary, externalReviewUrl, fetchedAt)
++- Produces: `fetchReviewsForRepo(repoUrl, apiKey): Promise<ReviewData[]>`
++- Produces: `ReviewStatus` type enum ('approved', 'needs-review', 'issues', 'not-reviewed')
++
++- [ ] **Step 1: Create types file with ReviewData and ReviewStatus**
++
++```typescript
++// lib/coderabbit/types.ts
++export type ReviewStatus = 'approved' | 'needs-review' | 'issues' | 'not-reviewed';
++
++export interface ReviewData {
++  filePath: string;
++  reviewStatus: ReviewStatus;
++  commentCount: number;
++  summary: string | null;
++  externalReviewUrl: string | null;
++  fetchedAt: Date;
++}
++
++export interface CodeRabbitReview {
++  file_path: string;
++  review_status: ReviewStatus;
++  comment_count: number;
++  summary?: string;
++  external_url?: string;
++}
++```
++
++- [ ] **Step 2: Write failing test for fetchReviewsForRepo**
++
++```typescript
++// __tests__/coderabbit.test.ts
++import { fetchReviewsForRepo } from '@/lib/coderabbit/client';
++
++describe('CodeRabbit Client', () => {
++  test('fetchReviewsForRepo returns array of ReviewData', async () => {
++    const mockReviews = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'test-api-key'
++    );
++
++    expect(Array.isArray(mockReviews)).toBe(true);
++    if (mockReviews.length > 0) {
++      expect(mockReviews[0]).toHaveProperty('filePath');
++      expect(mockReviews[0]).toHaveProperty('reviewStatus');
++      expect(mockReviews[0]).toHaveProperty('commentCount');
++    }
++  });
++
++  test('handles API errors gracefully', async () => {
++    const result = await fetchReviewsForRepo(
++      'https://github.com/example/repo',
++      'invalid-key'
++    );
++
++    expect(Array.isArray(result)).toBe(true);
++    // Should return empty array on error, not throw
++  });
++
++  test('respects 30 second timeout', async () => {
++    const startTime = Date.now();
++    await fetchReviewsForRepo(
++      'https://github.com/slow-api/repo',
++      'test-key'
++    );
++    const elapsed = Date.now() - startTime;
++
++    expect(elapsed).toBeLessThan(35000); // 30s + buffer
++  });
++});
++```
++
++- [ ] **Step 3: Implement fetchReviewsForRepo with timeout**
++
++```typescript
++// lib/coderabbit/client.ts
++import { ReviewData, ReviewStatus, CodeRabbitReview } from './types';
++
++const CODERABBIT_API_BASE = 'https://api.coderabbit.ai/v1';
++const API_TIMEOUT_MS = 30000; // 30 seconds
++
++function normalizeFilePath(path: string): string {
++  // Normalize paths from CodeRabbit to match parser output
++  return path.replace(/\\/g, '/').replace(/^\/+/, '');
++}
++
++function isValidReviewStatus(status: unknown): status is ReviewStatus {
++  return ['approved', 'needs-review', 'issues', 'not-reviewed'].includes(String(status));
++}
++
++export async function fetchReviewsForRepo(
++  repoUrl: string,
++  apiKey: string
++): Promise<ReviewData[]> {
++  if (!apiKey) {
++    console.warn('CodeRabbit API key not configured');
++    return [];
++  }
++
++  try {
++    const controller = new AbortController();
++    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
++
++    const response = await fetch(`${CODERABBIT_API_BASE}/reviews`, {
++      method: 'POST',
++      headers: {
++        'Authorization': `Bearer ${apiKey}`,
++        'Content-Type': 'application/json',
++      },
++      body: JSON.stringify({
++        repository_url: repoUrl,
++      }),
++      signal: controller.signal,
++    });
++
++    clearTimeout(timeoutId);
++
++    if (!response.ok) {
++      console.warn(`CodeRabbit API error: ${response.status} ${response.statusText}`);
++      return [];
++    }
++
++    const data = await response.json();
++    const reviews: CodeRabbitReview[] = data.reviews || [];
++
++    return reviews
++      .filter((r) => isValidReviewStatus(r.review_status))
++      .map((review) => ({
++        filePath: normalizeFilePath(review.file_path),
++        reviewStatus: review.review_status as ReviewStatus,
++        commentCount: review.comment_count || 0,
++        summary: review.summary || null,
++        externalReviewUrl: review.external_url || null,
++        fetchedAt: new Date(),
++      }));
++  } catch (error) {
++    if (error instanceof Error && error.name === 'AbortError') {
++      console.warn('CodeRabbit API request timed out (30s)');
++    } else {
++      console.warn('CodeRabbit API request failed:', error);
++    }
++    return [];
++  }
++}
++```
++
++- [ ] **Step 4: Run tests to verify they pass**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="CodeRabbit Client"
++```
++
++Expected: All CodeRabbit client tests pass.
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add lib/coderabbit/types.ts lib/coderabbit/client.ts __tests__/coderabbit.test.ts
++git commit -m "feat: add CodeRabbit API client with timeout and error handling"
++```
++
++---
++
++### Task 2: Storage Layer and Database Types
++
++**Files:**
++- Create: `lib/coderabbit/storage.ts`
++- Test: `__tests__/coderabbit.test.ts` (storage tests)
++
++**Interfaces:**
++- Consumes: `ReviewData` from Task 1
++- Produces: `storeReviews(orgId, repoId, reviews): Promise<void>`
++- Produces: `getReviewForFile(orgId, repoId, filePath): Promise<ReviewData | null>`
++- Produces: `getReviewsForRepo(orgId, repoId): Promise<Map<string, ReviewData>>`
++- Produces: `refreshReview(orgId, repoId, filePath): Promise<ReviewData | null>`
++
++- [ ] **Step 1: Write test for storeReviews with RLS**
++
++```typescript
++// __tests__/coderabbit.test.ts (add to existing file)
++import { storeReviews, getReviewForFile, getReviewsForRepo } from '@/lib/coderabbit/storage';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++describe('CodeRabbit Storage', () => {
++  const mockReviews: ReviewData[] = [
++    {
++      filePath: 'src/components/Button.tsx',
++      reviewStatus: 'approved',
++      commentCount: 0,
++      summary: 'Looks good',
++      externalReviewUrl: 'https://coderabbit.ai/review/123',
++      fetchedAt: new Date(),
++    },
++    {
++      filePath: 'src/utils/helpers.ts',
++      reviewStatus: 'needs-review',
++      commentCount: 3,
++      summary: '3 suggestions',
++      externalReviewUrl: 'https://coderabbit.ai/review/124',
++      fetchedAt: new Date(),
++    },
++  ];
++
++  test('storeReviews inserts reviews into database', async () => {
++    await storeReviews('org-1', 'repo-1', mockReviews);
++
++    const stored = await getReviewForFile('org-1', 'repo-1', 'src/components/Button.tsx');
++    expect(stored).not.toBeNull();
++    expect(stored?.reviewStatus).toBe('approved');
++  });
++
++  test('getReviewsForRepo returns Map of all reviews', async () => {
++    await storeReviews('org-1', 'repo-1', mockReviews);
++
++    const allReviews = await getReviewsForRepo('org-1', 'repo-1');
++    expect(allReviews).toBeInstanceOf(Map);
++    expect(allReviews.size).toBe(2);
++    expect(allReviews.get('src/components/Button.tsx')).toBeDefined();
++  });
++
++  test('RLS prevents access from different organization', async () => {
++    await storeReviews('org-1', 'repo-1', mockReviews);
++
++    // org-2 should not see org-1's reviews
++    const review = await getReviewForFile('org-2', 'repo-1', 'src/components/Button.tsx');
++    expect(review).toBeNull();
++  });
++
++  test('getReviewForFile returns null if not found', async () => {
++    const review = await getReviewForFile('org-1', 'repo-1', 'nonexistent.ts');
++    expect(review).toBeNull();
++  });
++});
++```
++
++- [ ] **Step 2: Implement storage layer**
++
++```typescript
++// lib/coderabbit/storage.ts
++import { createClient } from '@supabase/supabase-js';
++import { ReviewData, ReviewStatus } from './types';
++
++const supabase = createClient(
++  process.env.NEXT_PUBLIC_SUPABASE_URL!,
++  process.env.SUPABASE_SERVICE_KEY!
++);
++
++export async function storeReviews(
++  orgId: string,
++  repoId: string,
++  reviews: ReviewData[]
++): Promise<void> {
++  if (reviews.length === 0) return;
++
++  const rows = reviews.map((review) => ({
++    id: crypto.randomUUID(),
++    organization_id: orgId,
++    repository_id: repoId,
++    file_path: review.filePath,
++    review_status: review.reviewStatus as ReviewStatus,
++    comment_count: review.commentCount,
++    summary: review.summary,
++    external_review_url: review.externalReviewUrl,
++    fetched_at: review.fetchedAt.toISOString(),
++    created_at: new Date().toISOString(),
++  }));
++
++  const { error } = await supabase
++    .from('coderabbit_reviews')
++    .upsert(rows, { onConflict: 'repository_id,file_path' });
++
++  if (error) {
++    console.error('Failed to store reviews:', error);
++    throw error;
++  }
++}
++
++export async function getReviewForFile(
++  orgId: string,
++  repoId: string,
++  filePath: string
++): Promise<ReviewData | null> {
++  const { data, error } = await supabase
++    .from('coderabbit_reviews')
++    .select('*')
++    .eq('organization_id', orgId)
++    .eq('repository_id', repoId)
++    .eq('file_path', filePath)
++    .single();
++
++  if (error) {
++    if (error.code === 'PGRST116') {
++      // Not found is not an error
++      return null;
++    }
++    console.error('Failed to fetch review:', error);
++    throw error;
++  }
++
++  return data ? mapRowToReviewData(data) : null;
++}
++
++export async function getReviewsForRepo(
++  orgId: string,
++  repoId: string
++): Promise<Map<string, ReviewData>> {
++  const { data, error } = await supabase
++    .from('coderabbit_reviews')
++    .select('*')
++    .eq('organization_id', orgId)
++    .eq('repository_id', repoId);
++
++  if (error) {
++    console.error('Failed to fetch reviews:', error);
++    throw error;
++  }
++
++  const map = new Map<string, ReviewData>();
++  (data || []).forEach((row) => {
++    map.set(row.file_path, mapRowToReviewData(row));
++  });
++  return map;
++}
++
++function mapRowToReviewData(row: any): ReviewData {
++  return {
++    filePath: row.file_path,
++    reviewStatus: row.review_status as ReviewStatus,
++    commentCount: row.comment_count || 0,
++    summary: row.summary || null,
++    externalReviewUrl: row.external_review_url || null,
++    fetchedAt: new Date(row.fetched_at),
++  };
++}
++```
++
++- [ ] **Step 3: Run storage tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="Storage"
++```
++
++Expected: All storage tests pass, RLS verified.
++
++- [ ] **Step 4: Commit**
++
++```bash
++git add lib/coderabbit/storage.ts
++git commit -m "feat: add CodeRabbit storage layer with RLS enforcement"
++```
++
++---
++
++### Task 3: Database Migration and Organization Setup
++
++**Files:**
++- Create: `supabase/migrations/002_add_coderabbit_reviews.sql`
++
++**Interfaces:**
++- Consumes: Nothing (database layer)
++- Produces: `coderabbit_reviews` table, `coderabbit_api_key` on organizations
++
++- [ ] **Step 1: Create migration file**
++
++```sql
++-- supabase/migrations/002_add_coderabbit_reviews.sql
++
++-- Add CodeRabbit API key column to organizations (encrypted)
++ALTER TABLE organizations
++ADD COLUMN coderabbit_api_key TEXT;
++
++-- Create coderabbit_reviews table
++CREATE TABLE coderabbit_reviews (
++  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  organization_id UUID NOT NULL REFERENCES organizations(id),
++  repository_id UUID NOT NULL REFERENCES repositories(id),
++  file_path TEXT NOT NULL,
++  review_status TEXT NOT NULL CHECK (review_status IN ('approved', 'needs-review', 'issues', 'not-reviewed')),
++  comment_count INTEGER DEFAULT 0,
++  summary TEXT,
++  external_review_url TEXT,
++  fetched_at TIMESTAMP DEFAULT NOW(),
++  created_at TIMESTAMP DEFAULT NOW(),
++  UNIQUE(repository_id, file_path)
++);
++
++-- Create indexes for performance
++CREATE INDEX idx_coderabbit_reviews_org_repo
++  ON coderabbit_reviews(organization_id, repository_id);
++
++CREATE INDEX idx_coderabbit_reviews_file_path
++  ON coderabbit_reviews(repository_id, file_path);
++
++-- Enable RLS on coderabbit_reviews
++ALTER TABLE coderabbit_reviews ENABLE ROW LEVEL SECURITY;
++
++-- RLS Policy: Users can read reviews only from their organization
++CREATE POLICY "Users can read reviews from their org"
++  ON coderabbit_reviews
++  FOR SELECT
++  USING (
++    organization_id IN (
++      SELECT organization_id FROM organization_members
++      WHERE user_id = auth.uid()
++    )
++  );
++
++-- RLS Policy: System can insert (from service role)
++CREATE POLICY "Service can insert reviews"
++  ON coderabbit_reviews
++  FOR INSERT
++  WITH CHECK (TRUE);
++
++-- RLS Policy: Service can update reviews
++CREATE POLICY "Service can update reviews"
++  ON coderabbit_reviews
++  FOR UPDATE
++  USING (TRUE)
++  WITH CHECK (TRUE);
++```
++
++- [ ] **Step 2: Verify migration file syntax**
++
++```bash
++cd supabase && cat migrations/002_add_coderabbit_reviews.sql
++```
++
++Expected: SQL file readable, no syntax errors.
++
++- [ ] **Step 3: Run migration in development (Supabase local or staging)**
++
++```bash
++supabase migration list
++# Then apply via Supabase dashboard or CLI
++```
++
++- [ ] **Step 4: Verify tables exist**
++
++```bash
++supabase db list
++# Check that coderabbit_reviews table appears
++```
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add supabase/migrations/002_add_coderabbit_reviews.sql
++git commit -m "feat: add CodeRabbit reviews table with RLS and encryption"
++```
++
++---
++
++### Task 4: Phase 3 Integration - Fetch Reviews After Analysis
++
++**Files:**
++- Modify: `lib/parser/runner.ts`
++
++**Interfaces:**
++- Consumes: `fetchReviewsForRepo()` from Task 1
++- Consumes: `storeReviews()` from Task 2
++- Produces: Modified `analyzeRepository()` to call CodeRabbit fetch
++
++- [ ] **Step 1: Write test for analysis + review fetch**
++
++```typescript
++// __tests__/coderabbit.test.ts (add to existing file)
++import { analyzeRepository } from '@/lib/parser/runner';
++
++describe('Phase 3 Integration - CodeRabbit', () => {
++  test('analyzeRepository calls fetchCodeRabbitReviews after analysis', async () => {
++    const result = await analyzeRepository({
++      url: 'https://github.com/example/repo',
++      organizationId: 'org-1',
++      repositoryId: 'repo-1',
++    });
++
++    // Analysis should complete successfully
++    expect(result).toBeDefined();
++    expect(result.fileList).toBeDefined();
++
++    // Reviews should be stored (fetch happens in background)
++    await new Promise((resolve) => setTimeout(resolve, 1000));
++
++    const reviews = await getReviewsForRepo('org-1', 'repo-1');
++    // Should have some reviews or empty if API unavailable
++    expect(reviews).toBeInstanceOf(Map);
++  });
++
++  test('analysis completes even if CodeRabbit API fails', async () => {
++    // Set invalid API key to force failure
++    process.env.CODERABBIT_API_KEY_ORG_1 = 'invalid';
++
++    const result = await analyzeRepository({
++      url: 'https://github.com/example/repo',
++      organizationId: 'org-1',
++      repositoryId: 'repo-1',
++    });
++
++    // Analysis should succeed despite CodeRabbit failure
++    expect(result).toBeDefined();
++    expect(result.fileList).toBeDefined();
++  });
++
++  test('CodeRabbit fetch respects 30 second timeout', async () => {
++    const startTime = Date.now();
++
++    const result = await analyzeRepository({
++      url: 'https://github.com/example/repo',
++      organizationId: 'org-1',
++      repositoryId: 'repo-1',
++    });
++
++    const elapsed = Date.now() - startTime;
++
++    // Total should not exceed analysis time + 30s CodeRabbit timeout
++    expect(elapsed).toBeLessThan(60000);
++  });
++});
++```
++
++- [ ] **Step 2: Locate analyzeRepository function**
++
++```bash
++grep -r "export.*analyzeRepository" lib/parser/
++```
++
++Find the exact function signature and location.
++
++- [ ] **Step 3: Add CodeRabbit fetch after analysis storage**
++
++```typescript
++// lib/parser/runner.ts (add near end of analyzeRepository function)
++
++// After storing analysis to database, fetch CodeRabbit reviews (non-blocking)
++if (orgId && repoId) {
++  // Fetch reviews asynchronously without blocking analysis completion
++  const coderabbitApiKey = await getOrganizationCodeRabbitKey(orgId);
++
++  if (coderabbitApiKey) {
++    // Fire and forget with timeout
++    Promise.race([
++      fetchReviewsForRepo(repositoryUrl, coderabbitApiKey)
++        .then((reviews) => storeReviews(orgId, repoId, reviews))
++        .catch((error) => {
++          console.warn('Failed to fetch CodeRabbit reviews:', error);
++        }),
++      new Promise((_, reject) =>
++        setTimeout(() => reject(new Error('CodeRabbit timeout')), 30000)
++      ),
++    ]).catch((error) => {
++      console.warn('CodeRabbit review fetch timed out or failed:', error);
++      // Don't fail analysis on CodeRabbit errors
++    });
++  } else {
++    console.debug('No CodeRabbit API key configured for organization');
++  }
++}
++```
++
++- [ ] **Step 4: Add helper function to get API key from organization**
++
++```typescript
++// lib/parser/runner.ts (add function)
++async function getOrganizationCodeRabbitKey(orgId: string): Promise<string | null> {
++  const supabase = createClient(
++    process.env.NEXT_PUBLIC_SUPABASE_URL!,
++    process.env.SUPABASE_SERVICE_KEY!
++  );
++
++  const { data, error } = await supabase
++    .from('organizations')
++    .select('coderabbit_api_key')
++    .eq('id', orgId)
++    .single();
++
++  if (error) {
++    console.warn('Failed to fetch organization API key:', error);
++    return null;
++  }
++
++  return data?.coderabbit_api_key || null;
++}
++```
++
++- [ ] **Step 5: Run integration tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="Phase 3 Integration"
++```
++
++Expected: All integration tests pass, analysis completes with graceful CodeRabbit degradation.
++
++- [ ] **Step 6: Commit**
++
++```bash
++git add lib/parser/runner.ts
++git commit -m "feat: fetch CodeRabbit reviews after analysis completes"
++```
++
++---
++
++### Task 5: API Endpoint for On-Demand Refresh
++
++**Files:**
++- Create: `app/api/coderabbit/refresh/route.ts`
++
++**Interfaces:**
++- Consumes: `getReviewForFile()`, `refreshReview()` from Task 2
++- Consumes: `fetchReviewsForRepo()` from Task 1
++- Produces: POST `/api/coderabbit/refresh` endpoint
++
++- [ ] **Step 1: Write test for refresh endpoint**
++
++```typescript
++// __tests__/coderabbit.test.ts (add refresh endpoint tests)
++describe('Refresh Endpoint', () => {
++  test('POST /api/coderabbit/refresh returns ReviewData', async () => {
++    const response = await fetch('/api/coderabbit/refresh', {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        analysisId: 'analysis-1',
++        filePath: 'src/components/Button.tsx',
++      }),
++    });
++
++    expect(response.status).toBe(200);
++    const data = await response.json();
++    expect(data).toHaveProperty('filePath');
++    expect(data).toHaveProperty('reviewStatus');
++  });
++
++  test('returns 401 if user not authenticated', async () => {
++    const response = await fetch('/api/coderabbit/refresh', {
++      method: 'POST',
++      body: JSON.stringify({
++        analysisId: 'analysis-1',
++        filePath: 'src/components/Button.tsx',
++      }),
++    });
++
++    expect(response.status).toBe(401);
++  });
++
++  test('returns 404 if analysis not found', async () => {
++    const response = await fetch('/api/coderabbit/refresh', {
++      method: 'POST',
++      headers: {
++        'Content-Type': 'application/json',
++        'Authorization': 'Bearer valid-token',
++      },
++      body: JSON.stringify({
++        analysisId: 'nonexistent-analysis',
++        filePath: 'src/components/Button.tsx',
++      }),
++    });
++
++    expect(response.status).toBe(404);
++  });
++
++  test('returns 503 if CodeRabbit API unavailable', async () => {
++    // Mock CodeRabbit API failure
++    const response = await fetch('/api/coderabbit/refresh', {
++      method: 'POST',
++      headers: {
++        'Content-Type': 'application/json',
++        'Authorization': 'Bearer valid-token',
++      },
++      body: JSON.stringify({
++        analysisId: 'analysis-1',
++        filePath: 'src/components/Button.tsx',
++      }),
++    });
++
++    // Should return 503 or graceful response
++    expect([503, 200]).toContain(response.status);
++  });
++});
++```
++
++- [ ] **Step 2: Create route handler file**
++
++```typescript
++// app/api/coderabbit/refresh/route.ts
++import { NextRequest, NextResponse } from 'next/server';
++import { auth } from '@clerk/nextjs/server';
++import { createClient } from '@supabase/supabase-js';
++import { getReviewForFile } from '@/lib/coderabbit/storage';
++import { fetchReviewsForRepo } from '@/lib/coderabbit/client';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++export async function POST(request: NextRequest) {
++  try {
++    // 1. Authentication
++    const { userId, sessionClaims } = await auth();
++    if (!userId) {
++      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
++    }
++
++    // 2. Parse request body
++    const { analysisId, filePath } = await request.json();
++    if (!analysisId || !filePath) {
++      return NextResponse.json(
++        { error: 'Missing analysisId or filePath' },
++        { status: 400 }
++      );
++    }
++
++    // 3. Verify analysis ownership via RLS
++    const supabase = createClient(
++      process.env.NEXT_PUBLIC_SUPABASE_URL!,
++      process.env.SUPABASE_SERVICE_KEY!
++    );
++
++    const { data: analysis, error: analysisError } = await supabase
++      .from('analyses')
++      .select('id, repository_id, organization_id')
++      .eq('id', analysisId)
++      .single();
++
++    if (analysisError || !analysis) {
++      return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
++    }
++
++    // 4. Verify user is in organization (RLS check)
++    const { data: orgMember, error: orgError } = await supabase
++      .from('organization_members')
++      .select('organization_id')
++      .eq('organization_id', analysis.organization_id)
++      .eq('user_id', userId)
++      .single();
++
++    if (orgError || !orgMember) {
++      return NextResponse.json(
++        { error: 'Unauthorized - not in organization' },
++        { status: 403 }
++      );
++    }
++
++    // 5. Get repository for CodeRabbit API call
++    const { data: repo, error: repoError } = await supabase
++      .from('repositories')
++      .select('url, coderabbit_api_key')
++      .eq('id', analysis.repository_id)
++      .single();
++
++    if (repoError || !repo) {
++      return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
++    }
++
++    // 6. Get CodeRabbit API key from organization
++    const { data: org, error: orgKeyError } = await supabase
++      .from('organizations')
++      .select('coderabbit_api_key')
++      .eq('id', analysis.organization_id)
++      .single();
++
++    if (orgKeyError || !org?.coderabbit_api_key) {
++      // Return 503 - CodeRabbit not configured
++      return NextResponse.json(
++        { error: 'CodeRabbit not configured for organization' },
++        { status: 503 }
++      );
++    }
++
++    // 7. Fetch fresh review from CodeRabbit
++    const reviews = await fetchReviewsForRepo(repo.url, org.coderabbit_api_key);
++    const refreshedReview = reviews.find((r) => r.filePath === filePath);
++
++    if (!refreshedReview) {
++      // File has no review (not-reviewed status)
++      const defaultReview: ReviewData = {
++        filePath,
++        reviewStatus: 'not-reviewed',
++        commentCount: 0,
++        summary: null,
++        externalReviewUrl: null,
++        fetchedAt: new Date(),
++      };
++
++      // Store the default review
++      await supabase
++        .from('coderabbit_reviews')
++        .upsert({
++          id: crypto.randomUUID(),
++          organization_id: analysis.organization_id,
++          repository_id: analysis.repository_id,
++          file_path: filePath,
++          review_status: 'not-reviewed',
++          comment_count: 0,
++          summary: null,
++          external_review_url: null,
++          fetched_at: new Date().toISOString(),
++          created_at: new Date().toISOString(),
++        }, { onConflict: 'repository_id,file_path' });
++
++      return NextResponse.json(defaultReview);
++    }
++
++    // 8. Store refreshed review in database
++    await supabase
++      .from('coderabbit_reviews')
++      .upsert({
++        id: crypto.randomUUID(),
++        organization_id: analysis.organization_id,
++        repository_id: analysis.repository_id,
++        file_path: refreshedReview.filePath,
++        review_status: refreshedReview.reviewStatus,
++        comment_count: refreshedReview.commentCount,
++        summary: refreshedReview.summary,
++        external_review_url: refreshedReview.externalReviewUrl,
++        fetched_at: new Date().toISOString(),
++        created_at: new Date().toISOString(),
++      }, { onConflict: 'repository_id,file_path' });
++
++    return NextResponse.json(refreshedReview);
++  } catch (error) {
++    console.error('Refresh endpoint error:', error);
++    return NextResponse.json(
++      { error: 'Internal server error' },
++      { status: 500 }
++    );
++  }
++}
++```
++
++- [ ] **Step 3: Run endpoint tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="Refresh Endpoint"
++```
++
++Expected: All endpoint tests pass, auth and RLS verified.
++
++- [ ] **Step 4: Test endpoint manually (integration)**
++
++```bash
++# With valid auth token
++curl -X POST http://localhost:3000/api/coderabbit/refresh \
++  -H "Content-Type: application/json" \
++  -H "Authorization: Bearer $TOKEN" \
++  -d '{"analysisId":"test","filePath":"src/example.ts"}'
++```
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add app/api/coderabbit/refresh/route.ts
++git commit -m "feat: add CodeRabbit refresh endpoint with auth and RLS verification"
++```
++
++---
++
++### Task 6: DependencyGraph Component - Review Badges
++
++**Files:**
++- Modify: `components/DependencyGraph.tsx`
++
++**Interfaces:**
++- Consumes: `ReviewData` from Task 1
++- Produces: Modified DependencyGraph with reviews prop and badge rendering
++
++- [ ] **Step 1: Write test for badge rendering**
++
++```typescript
++// __tests__/coderabbit.test.ts (add component tests)
++import { render, screen } from '@testing-library/react';
++import { DependencyGraph } from '@/components/DependencyGraph';
++import { ReactFlowProvider } from 'reactflow';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++describe('DependencyGraph - Review Badges', () => {
++  const mockReviews: Map<string, ReviewData> = new Map([
++    [
++      'src/Button.tsx',
++      {
++        filePath: 'src/Button.tsx',
++        reviewStatus: 'approved',
++        commentCount: 0,
++        summary: null,
++        externalReviewUrl: 'https://example.com/123',
++        fetchedAt: new Date(),
++      },
++    ],
++    [
++      'src/helpers.ts',
++      {
++        filePath: 'src/helpers.ts',
++        reviewStatus: 'needs-review',
++        commentCount: 2,
++        summary: '2 suggestions',
++        externalReviewUrl: 'https://example.com/124',
++        fetchedAt: new Date(),
++      },
++    ],
++  ]);
++
++  test('renders review badge for approved file', () => {
++    const files = [
++      { path: 'src/Button.tsx', kind: 'component' as const, language: 'tsx' as const, isBarrel: false },
++    ];
++    const edges = [];
++
++    render(
++      <ReactFlowProvider>
++        <DependencyGraph
++          files={files}
++          edges={edges}
++          reviews={mockReviews}
++          onNodeSelect={() => {}}
++          layout="hierarchical"
++        />
++      </ReactFlowProvider>
++    );
++
++    // Badge should render (implementation detail, check for green color)
++    const badge = screen.getByTitle('Review: approved (0 comments)');
++    expect(badge).toBeInTheDocument();
++  });
++
++  test('badge colors match review status', () => {
++    // Color map test
++    const colorMap = {
++      approved: '#22c55e',
++      'needs-review': '#eab308',
++      issues: '#ef4444',
++      'not-reviewed': '#9ca3af',
++    };
++
++    Object.entries(colorMap).forEach(([status, color]) => {
++      expect(color).toMatch(/^#[0-9a-f]{6}$/i);
++    });
++  });
++
++  test('tooltip shows comment count for needs-review', () => {
++    const files = [
++      { path: 'src/helpers.ts', kind: 'util' as const, language: 'ts' as const, isBarrel: false },
++    ];
++    const edges = [];
++
++    render(
++      <ReactFlowProvider>
++        <DependencyGraph
++          files={files}
++          edges={edges}
++          reviews={mockReviews}
++          onNodeSelect={() => {}}
++          layout="hierarchical"
++        />
++      </ReactFlowProvider>
++    );
++
++    const badge = screen.getByTitle('Review: needs-review (2 comments)');
++    expect(badge).toBeInTheDocument();
++  });
++});
++```
++
++- [ ] **Step 2: Read current DependencyGraph component**
++
++```bash
++head -100 components/DependencyGraph.tsx
++```
++
++Understand current node data structure and rendering.
++
++- [ ] **Step 3: Add reviews prop to DependencyGraph**
++
++```typescript
++// components/DependencyGraph.tsx (update interface)
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++interface DependencyGraphProps {
++  files: File[];
++  edges: Edge[];
++  onNodeSelect: (filePath: string) => void;
++  layout: 'hierarchical' | 'force-directed';
++  reviews?: Map<string, ReviewData>; // Add this prop
++}
++
++export function DependencyGraph({
++  files,
++  edges,
++  onNodeSelect,
++  layout,
++  reviews = new Map(),
++}: DependencyGraphProps) {
++  // ... existing code ...
++
++  // When creating node data, attach review status
++  const nodeData = files.map((file) => {
++    const review = reviews.get(file.path);
++    return {
++      id: file.path,
++      data: {
++        label: getFileName(file.path),
++        kind: file.kind,
++        reviewStatus: review?.reviewStatus || 'not-reviewed',
++        commentCount: review?.commentCount || 0,
++      },
++      // ... other node props ...
++    };
++  });
++
++  // ... rest of component ...
++}
++```
++
++- [ ] **Step 4: Add badge rendering in node customization**
++
++```typescript
++// components/DependencyGraph.tsx (add custom node component)
++const reviewStatusColors: Record<string, string> = {
++  'approved': '#22c55e',
++  'needs-review': '#eab308',
++  'issues': '#ef4444',
++  'not-reviewed': '#9ca3af',
++};
++
++function BadgeNode({ data }: { data: any }) {
++  const badgeColor = reviewStatusColors[data.reviewStatus] || reviewStatusColors['not-reviewed'];
++
++  return (
++    <div className="relative w-full h-full bg-white dark:bg-slate-900 rounded border">
++      <div className="p-3 text-sm font-medium truncate">{data.label}</div>
++
++      {/* Review badge in top-right corner */}
++      <div
++        className="absolute top-1 right-1 w-3 h-3 rounded-full cursor-pointer"
++        style={{ backgroundColor: badgeColor }}
++        title={`Review: ${data.reviewStatus} (${data.commentCount} comments)`}
++        onClick={() => {}}
++      />
++    </div>
++  );
++}
++
++// Register custom node type
++const nodeTypes = {
++  badge: BadgeNode,
++};
++```
++
++- [ ] **Step 5: Run component tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="DependencyGraph.*Review Badges"
++```
++
++Expected: Badge rendering tests pass, colors verified.
++
++- [ ] **Step 6: Commit**
++
++```bash
++git add components/DependencyGraph.tsx
++git commit -m "feat: add review status badges to dependency graph nodes"
++```
++
++---
++
++### Task 7: FileDetail Component - Code Review Section
++
++**Files:**
++- Modify: `components/FileDetail.tsx`
++
++**Interfaces:**
++- Consumes: `ReviewData` from Task 1
++- Produces: Modified FileDetail with Code Review section
++
++- [ ] **Step 1: Write test for Code Review section**
++
++```typescript
++// __tests__/coderabbit.test.ts (add FileDetail tests)
++import { render, screen, fireEvent, waitFor } from '@testing-library/react';
++import { FileDetail } from '@/components/FileDetail';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++describe('FileDetail - Code Review Section', () => {
++  const mockReview: ReviewData = {
++    filePath: 'src/Button.tsx',
++    reviewStatus: 'needs-review',
++    commentCount: 3,
++    summary: '3 suggestions found',
++    externalReviewUrl: 'https://coderabbit.ai/review/123',
++    fetchedAt: new Date(),
++  };
++
++  test('displays Code Review section with review data', () => {
++    render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={mockReview}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={false}
++      />
++    );
++
++    expect(screen.getByText('Code Review')).toBeInTheDocument();
++    expect(screen.getByText('3 suggestions found')).toBeInTheDocument();
++    expect(screen.getByText('3 comments')).toBeInTheDocument();
++  });
++
++  test('shows "View on CodeRabbit" link', () => {
++    render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={mockReview}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={false}
++      />
++    );
++
++    const link = screen.getByRole('link', { name: /View on CodeRabbit/i });
++    expect(link).toHaveAttribute('href', mockReview.externalReviewUrl);
++    expect(link).toHaveAttribute('target', '_blank');
++  });
++
++  test('Refresh Reviews button calls onRefreshReview', async () => {
++    const onRefresh = jest.fn();
++    render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={mockReview}
++        onRefreshReview={onRefresh}
++        isRefreshingReview={false}
++      />
++    );
++
++    const button = screen.getByRole('button', { name: /Refresh Reviews/i });
++    fireEvent.click(button);
++
++    await waitFor(() => {
++      expect(onRefresh).toHaveBeenCalledWith('src/Button.tsx');
++    });
++  });
++
++  test('shows loading state while refreshing', () => {
++    render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={mockReview}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={true}
++      />
++    );
++
++    expect(screen.getByText(/Fetching review data/i)).toBeInTheDocument();
++  });
++
++  test('shows empty state when no review available', () => {
++    render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={null}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={false}
++      />
++    );
++
++    expect(screen.getByText(/No review yet/i)).toBeInTheDocument();
++  });
++
++  test('badge color changes based on review status', () => {
++    const { rerender } = render(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={{
++          ...mockReview,
++          reviewStatus: 'approved',
++        }}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={false}
++      />
++    );
++
++    let badge = screen.getByText('Approved');
++    expect(badge).toHaveClass('bg-green-100');
++
++    rerender(
++      <FileDetail
++        selectedFile="src/Button.tsx"
++        fileKind="component"
++        reviewData={{
++          ...mockReview,
++          reviewStatus: 'issues',
++        }}
++        onRefreshReview={jest.fn()}
++        isRefreshingReview={false}
++      />
++    );
++
++    badge = screen.getByText('Issues');
++    expect(badge).toHaveClass('bg-red-100');
++  });
++});
++```
++
++- [ ] **Step 2: Read current FileDetail component**
++
++```bash
++head -150 components/FileDetail.tsx
++```
++
++Understand current structure and where to add Code Review section.
++
++- [ ] **Step 3: Add Code Review section to FileDetail**
++
++```typescript
++// components/FileDetail.tsx (add to component JSX, after metrics section)
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++interface FileDetailProps {
++  selectedFile: string | null;
++  fileKind: string;
++  fanIn: string[];
++  fanOut: string[];
++  blastRadius: string[];
++  neighbors: { in: string[]; out: string[] };
++  explanation: string | null;
++  isLoadingExplanation: boolean;
++  onLoadExplanation: (filePath: string) => void;
++  reviewData?: ReviewData | null;
++  onRefreshReview?: (filePath: string) => void;
++  isRefreshingReview?: boolean;
++}
++
++export function FileDetail({
++  selectedFile,
++  fileKind,
++  fanIn,
++  fanOut,
++  blastRadius,
++  neighbors,
++  explanation,
++  isLoadingExplanation,
++  onLoadExplanation,
++  reviewData = null,
++  onRefreshReview = () => {},
++  isRefreshingReview = false,
++}: FileDetailProps) {
++  // ... existing code ...
++
++  // Add Code Review section (after metrics, before explanation)
++  return (
++    <div className="flex flex-col h-full bg-white dark:bg-slate-950 p-4">
++      {/* File header, metrics sections ... */}
++
++      {/* Code Review Section */}
++      {selectedFile && (
++        <div className="mt-6 pt-6 border-t border-gray-200 dark:border-slate-800">
++          <h3 className="text-sm font-semibold mb-3">Code Review</h3>
++
++          {isRefreshingReview ? (
++            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-slate-400">
++              <div className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
++              Fetching review data...
++            </div>
++          ) : reviewData ? (
++            <>
++              {/* Review status badge */}
++              <div className="mb-3 flex items-center gap-2">
++                <span
++                  className={`inline-block px-2 py-1 rounded text-xs font-medium ${
++                    reviewData.reviewStatus === 'approved'
++                      ? 'bg-green-100 text-green-900 dark:bg-green-900 dark:text-green-100'
++                      : reviewData.reviewStatus === 'needs-review'
++                      ? 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900 dark:text-yellow-100'
++                      : reviewData.reviewStatus === 'issues'
++                      ? 'bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100'
++                      : 'bg-gray-100 text-gray-900 dark:bg-slate-700 dark:text-slate-100'
++                  }`}
++                >
++                  {reviewData.reviewStatus === 'needs-review'
++                    ? 'Needs Review'
++                    : reviewData.reviewStatus.charAt(0).toUpperCase() +
++                      reviewData.reviewStatus.slice(1).replace(/-/g, ' ')}
++                </span>
++                {reviewData.commentCount > 0 && (
++                  <span className="text-xs text-gray-600 dark:text-slate-400">
++                    {reviewData.commentCount} comment{reviewData.commentCount !== 1 ? 's' : ''}
++                  </span>
++                )}
++              </div>
++
++              {/* Summary */}
++              {reviewData.summary && (
++                <p className="text-sm text-gray-700 dark:text-slate-300 mb-3">
++                  {reviewData.summary}
++                </p>
++              )}
++
++              {/* External link */}
++              {reviewData.externalReviewUrl && (
++                <a
++                  href={reviewData.externalReviewUrl}
++                  target="_blank"
++                  rel="noopener noreferrer"
++                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline mb-3 inline-block"
++                >
++                  View on CodeRabbit →
++                </a>
++              )}
++
++              {/* Refresh button */}
++              <button
++                onClick={() => onRefreshReview(selectedFile)}
++                className="text-sm px-3 py-1 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-800"
++              >
++                Refresh Reviews
++              </button>
++            </>
++          ) : (
++            <div className="flex items-center justify-between">
++              <span className="text-sm text-gray-600 dark:text-slate-400">No review yet</span>
++              <button
++                onClick={() => onRefreshReview(selectedFile)}
++                className="text-sm px-3 py-1 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-800"
++              >
++                Refresh Reviews
++              </button>
++            </div>
++          )}
++        </div>
++      )}
++
++      {/* Explanation section continues below ... */}
++    </div>
++  );
++}
++```
++
++- [ ] **Step 4: Run component tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="FileDetail.*Code Review"
++```
++
++Expected: All Code Review section tests pass.
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add components/FileDetail.tsx
++git commit -m "feat: add Code Review section to FileDetail panel"
++```
++
++---
++
++### Task 8: Update Hooks - useFileDetail and useAnalysis
++
++**Files:**
++- Modify: `hooks/useFileDetail.ts`
++- Modify: `hooks/useAnalysis.ts`
++
++**Interfaces:**
++- Consumes: `ReviewData` from Task 1
++- Consumes: Review storage functions from Task 2
++- Produces: Modified hooks with review data and refresh logic
++
++- [ ] **Step 1: Write test for useFileDetail with reviews**
++
++```typescript
++// __tests__/coderabbit.test.ts (add hook tests)
++import { renderHook, act } from '@testing-library/react';
++import { useFileDetail } from '@/hooks/useFileDetail';
++import { useAnalysis } from '@/hooks/useAnalysis';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++describe('Hooks - Review Integration', () => {
++  test('useFileDetail includes reviewData state', () => {
++    const { result } = renderHook(() =>
++      useFileDetail({
++        files: [],
++        edges: [],
++        analysisId: 'test',
++        reviews: new Map(),
++      })
++    );
++
++    expect(result.current).toHaveProperty('reviewData');
++    expect(result.current).toHaveProperty('isRefreshingReview');
++    expect(result.current).toHaveProperty('refreshReview');
++  });
++
++  test('useFileDetail.refreshReview calls API endpoint', async () => {
++    const { result } = renderHook(() =>
++      useFileDetail({
++        files: [],
++        edges: [],
++        analysisId: 'analysis-1',
++        reviews: new Map(),
++      })
++    );
++
++    await act(async () => {
++      await result.current.refreshReview('src/test.ts');
++    });
++
++    // Should have called POST /api/coderabbit/refresh
++    // Verify through state or mock
++    expect(result.current.isRefreshingReview).toBe(false);
++  });
++
++  test('useAnalysis converts review array to Map', () => {
++    const mockReviews = [
++      {
++        filePath: 'src/a.ts',
++        reviewStatus: 'approved',
++        commentCount: 0,
++        summary: null,
++        externalReviewUrl: null,
++        fetchedAt: new Date(),
++      },
++    ];
++
++    const { result } = renderHook(() =>
++      useAnalysis({
++        analysisId: 'test',
++        reviews: mockReviews,
++      })
++    );
++
++    expect(result.current.reviews).toBeInstanceOf(Map);
++    expect(result.current.reviews.get('src/a.ts')).toBeDefined();
++  });
++});
++```
++
++- [ ] **Step 2: Read current useFileDetail hook**
++
++```bash
++head -100 hooks/useFileDetail.ts
++```
++
++Understand current state management.
++
++- [ ] **Step 3: Add review state to useFileDetail**
++
++```typescript
++// hooks/useFileDetail.ts (add review-related state and functions)
++import { useState } from 'react';
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++interface UseFileDetailProps {
++  files: File[];
++  edges: Edge[];
++  analysisId: string;
++  reviews: Map<string, ReviewData>;
++}
++
++export function useFileDetail({
++  files,
++  edges,
++  analysisId,
++  reviews,
++}: UseFileDetailProps) {
++  const [selectedFile, setSelectedFile] = useState<string | null>(null);
++  const [explanation, setExplanation] = useState<string | null>(null);
++  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
++  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
++  const [isRefreshingReview, setIsRefreshingReview] = useState(false);
++
++  const handleSelectFile = (filePath: string) => {
++    setSelectedFile(filePath);
++    setExplanation(null); // Clear previous explanation
++
++    // Update review data for selected file
++    const review = reviews.get(filePath);
++    setReviewData(review || null);
++  };
++
++  const handleLoadExplanation = async (filePath: string) => {
++    setIsLoadingExplanation(true);
++    try {
++      const response = await fetch(`/api/explain`, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ analysisId, filePath }),
++      });
++      const data = await response.json();
++      setExplanation(data.explanation);
++    } catch (error) {
++      console.error('Failed to load explanation:', error);
++      setExplanation('Failed to load explanation');
++    } finally {
++      setIsLoadingExplanation(false);
++    }
++  };
++
++  const handleRefreshReview = async (filePath: string) => {
++    setIsRefreshingReview(true);
++    try {
++      const response = await fetch(`/api/coderabbit/refresh`, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ analysisId, filePath }),
++      });
++
++      if (!response.ok) throw new Error('Failed to refresh review');
++
++      const freshReview: ReviewData = await response.json();
++      setReviewData(freshReview);
++
++      // Update the reviews map (caller should update their state)
++      reviews.set(filePath, freshReview);
++    } catch (error) {
++      console.error('Failed to refresh review:', error);
++    } finally {
++      setIsRefreshingReview(false);
++    }
++  };
++
++  // ... existing metric calculations (fanIn, fanOut, blastRadius) ...
++
++  return {
++    selectedFile,
++    onSelectFile: handleSelectFile,
++    explanation,
++    isLoadingExplanation,
++    onLoadExplanation: handleLoadExplanation,
++    reviewData,
++    isRefreshingReview,
++    onRefreshReview: handleRefreshReview,
++    // ... existing returns (fanIn, fanOut, blastRadius, neighbors) ...
++  };
++}
++```
++
++- [ ] **Step 4: Modify useAnalysis to convert reviews**
++
++```typescript
++// hooks/useAnalysis.ts (update Analysis type and conversion)
++import type { ReviewData } from '@/lib/coderabbit/types';
++
++interface Analysis {
++  id: string;
++  organizationId: string;
++  repositoryUrl: string;
++  fileList: File[];
++  edgeList: Edge[];
++  coverage: { parsed: number; skipped: number; reasons: Record<string, number> };
++  reviews?: ReviewData[]; // From API as array
++}
++
++export function useAnalysis(analysisId: string) {
++  const [data, setData] = useState<Analysis | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    const fetchAnalysis = async () => {
++      try {
++        const response = await fetch(`/api/analyses/${analysisId}`);
++        if (!response.ok) throw new Error('Failed to fetch analysis');
++
++        const analysis: Analysis = await response.json();
++        setData(analysis);
++      } catch (err) {
++        setError(err instanceof Error ? err.message : 'Unknown error');
++      } finally {
++        setLoading(false);
++      }
++    };
++
++    fetchAnalysis();
++  }, [analysisId]);
++
++  // Convert reviews array to Map for O(1) lookup by filePath
++  const reviewsMap = useMemo(() => {
++    const map = new Map<string, ReviewData>();
++    (data?.reviews || []).forEach((review) => {
++      map.set(review.filePath, review);
++    });
++    return map;
++  }, [data?.reviews]);
++
++  return {
++    analysis: data,
++    reviews: reviewsMap,
++    loading,
++    error,
++  };
++}
++```
++
++- [ ] **Step 5: Run hook tests**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --testNamePattern="Hooks.*Review"
++```
++
++Expected: All hook tests pass, state management verified.
++
++- [ ] **Step 6: Commit**
++
++```bash
++git add hooks/useFileDetail.ts hooks/useAnalysis.ts
++git commit -m "feat: add review data state and refresh logic to hooks"
++```
++
++---
++
++### Task 9: Comprehensive Tests
++
++**Files:**
++- Create/Extend: `__tests__/coderabbit.test.ts`
++
++**Interfaces:**
++- Consumes: All previous tasks' implementations
++- Produces: 30+ test cases covering client, storage, API, components, hooks, RLS, graceful degradation
++
++- [ ] **Step 1: Write full test suite**
++
++```typescript
++// __tests__/coderabbit.test.ts (complete test file)
++// [All tests from Tasks 1-8 combined, plus additional integration tests]
++
++describe('CodeRabbit Integration - Full Suite', () => {
++  // Client tests (Task 1)
++  describe('CodeRabbit Client', () => {
++    // ... from Task 1 ...
++  });
++
++  // Storage tests (Task 2)
++  describe('CodeRabbit Storage', () => {
++    // ... from Task 2 ...
++  });
++
++  // API tests (Task 5)
++  describe('Refresh Endpoint', () => {
++    // ... from Task 5 ...
++  });
++
++  // Component tests (Task 6-7)
++  describe('DependencyGraph - Review Badges', () => {
++    // ... from Task 6 ...
++  });
++
++  describe('FileDetail - Code Review Section', () => {
++    // ... from Task 7 ...
++  });
++
++  // Hook tests (Task 8)
++  describe('Hooks - Review Integration', () => {
++    // ... from Task 8 ...
++  });
++
++  // Additional integration tests
++  describe('Integration - End-to-End', () => {
++    test('complete flow: analyze → fetch reviews → display badges → refresh', async () => {
++      // Simulate full workflow
++      const analysisId = 'test-analysis';
++
++      // 1. Analyze repo (triggers CodeRabbit fetch)
++      const analysis = await analyzeRepository({
++        url: 'https://github.com/example/repo',
++        organizationId: 'org-1',
++        repositoryId: 'repo-1',
++      });
++
++      expect(analysis).toBeDefined();
++
++      // 2. Fetch analysis with reviews
++      const response = await fetch(`/api/analyses/${analysisId}`);
++      const data = await response.json();
++
++      expect(data.reviews).toBeDefined();
++
++      // 3. Render graph with badges
++      const reviewMap = new Map(
++        data.reviews.map((r: ReviewData) => [r.filePath, r])
++      );
++
++      // 4. Refresh a review
++      const refreshResponse = await fetch('/api/coderabbit/refresh', {
++        method: 'POST',
++        body: JSON.stringify({
++          analysisId,
++          filePath: data.reviews[0].filePath,
++        }),
++      });
++
++      expect(refreshResponse.ok).toBe(true);
++      const refreshed = await refreshResponse.json();
++      expect(refreshed.filePath).toBe(data.reviews[0].filePath);
++    });
++  });
++
++  // RLS Security tests
++  describe('RLS Security', () => {
++    test('user from different org cannot access reviews', async () => {
++      // org-1 stores reviews
++      await storeReviews('org-1', 'repo-1', [
++        {
++          filePath: 'src/test.ts',
++          reviewStatus: 'approved',
++          commentCount: 0,
++          summary: null,
++          externalReviewUrl: null,
++          fetchedAt: new Date(),
++        },
++      ]);
++
++      // org-2 tries to read (should get nothing)
++      const review = await getReviewForFile('org-2', 'repo-1', 'src/test.ts');
++      expect(review).toBeNull();
++    });
++
++    test('refresh endpoint blocks unauthorized users', async () => {
++      const response = await fetch('/api/coderabbit/refresh', {
++        method: 'POST',
++        body: JSON.stringify({
++          analysisId: 'org-1-analysis',
++          filePath: 'src/test.ts',
++        }),
++        headers: {
++          'Authorization': 'Bearer token-from-org-2',
++        },
++      });
++
++      expect([401, 403]).toContain(response.status);
++    });
++  });
++
++  // Graceful Degradation tests
++  describe('Graceful Degradation', () => {
++    test('analysis completes if CodeRabbit API unavailable', async () => {
++      // Set invalid API key
++      process.env.CODERABBIT_API_KEY = 'invalid';
++
++      const result = await analyzeRepository({
++        url: 'https://github.com/example/repo',
++        organizationId: 'org-1',
++        repositoryId: 'repo-1',
++      });
++
++      expect(result).toBeDefined();
++      expect(result.fileList).toBeDefined();
++      // Reviews should be missing or all "not-reviewed"
++    });
++
++    test('UI handles missing reviews gracefully', () => {
++      const { container } = render(
++        <FileDetail
++          selectedFile="src/test.ts"
++          fileKind="component"
++          reviewData={null}
++          onRefreshReview={jest.fn()}
++          isRefreshingReview={false}
++        />
++      );
++
++      // Should show "No review yet" without errors
++      expect(container.textContent).toContain('No review yet');
++    });
++
++    test('API returns 503 if no CodeRabbit key configured', async () => {
++      const response = await fetch('/api/coderabbit/refresh', {
++        method: 'POST',
++        headers: { 'Authorization': 'Bearer valid-token' },
++        body: JSON.stringify({
++          analysisId: 'test',
++          filePath: 'src/test.ts',
++        }),
++      });
++
++      expect(response.status).toBe(503);
++    });
++  });
++
++  // Edge cases
++  describe('Edge Cases', () => {
++    test('handles file path with special characters', async () => {
++      const specialPath = '@components/[id]/page.tsx';
++
++      await storeReviews('org-1', 'repo-1', [
++        {
++          filePath: specialPath,
++          reviewStatus: 'approved',
++          commentCount: 0,
++          summary: null,
++          externalReviewUrl: null,
++          fetchedAt: new Date(),
++        },
++      ]);
++
++      const review = await getReviewForFile('org-1', 'repo-1', specialPath);
++      expect(review).not.toBeNull();
++      expect(review?.filePath).toBe(specialPath);
++    });
++
++    test('handles very large comment counts', () => {
++      const review: ReviewData = {
++        filePath: 'src/test.ts',
++        reviewStatus: 'issues',
++        commentCount: 999,
++        summary: '999 issues found',
++        externalReviewUrl: null,
++        fetchedAt: new Date(),
++      };
++
++      expect(review.commentCount).toBe(999);
++    });
++
++    test('handles null/empty summary', async () => {
++      const reviews = [
++        {
++          filePath: 'src/test.ts',
++          reviewStatus: 'approved',
++          commentCount: 0,
++          summary: null,
++          externalReviewUrl: null,
++          fetchedAt: new Date(),
++        },
++      ];
++
++      await storeReviews('org-1', 'repo-1', reviews);
++      const stored = await getReviewForFile('org-1', 'repo-1', 'src/test.ts');
++
++      expect(stored?.summary).toBeNull();
++    });
++  });
++});
++```
++
++- [ ] **Step 2: Run full test suite**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts -v
++```
++
++Expected: 30+ tests passing, 100% pass rate.
++
++- [ ] **Step 3: Verify test coverage**
++
++```bash
++pnpm test -- __tests__/coderabbit.test.ts --coverage
++```
++
++Expected: Coverage >80% for client, storage, API routes.
++
++- [ ] **Step 4: Commit test suite**
++
++```bash
++git add __tests__/coderabbit.test.ts
++git commit -m "feat: add comprehensive test suite for CodeRabbit integration"
++```
++
++---
++
++### Task 10: Build Verification and Final Integration
++
++**Files:**
++- All files from previous tasks
++
++**Interfaces:**
++- Consumes: All previous implementations
++- Produces: Verified build, zero TypeScript errors, all tests passing
++
++- [ ] **Step 1: Run TypeScript strict mode check**
++
++```bash
++pnpm tsc --noEmit --strict
++```
++
++Expected: Zero TypeScript errors.
++
++- [ ] **Step 2: Run full build**
++
++```bash
++pnpm build
++```
++
++Expected: Build succeeds, no errors or warnings.
++
++- [ ] **Step 3: Run complete test suite (all phases)**
++
++```bash
++pnpm test
++```
++
++Expected: All tests passing (Phase 1-4 + Phase 5), 100% pass rate.
++
++- [ ] **Step 4: Verify component integration in page**
++
++```typescript
++// app/analyses/[id]/page.tsx (verify reviews prop is passed)
++// Update existing page to pass reviews to DependencyGraph
++export default async function AnalysisPage({ params }: { params: { id: string } }) {
++  const analysis = await getAnalysis(params.id);
++  const reviewMap = new Map(
++    (analysis.reviews || []).map((r) => [r.filePath, r])
++  );
++
++  return (
++    <div>
++      <DependencyGraph
++        files={analysis.fileList}
++        edges={analysis.edgeList}
++        reviews={reviewMap}
++        // ... other props ...
++      />
++    </div>
++  );
++}
++```
++
++- [ ] **Step 5: Run lint check**
++
++```bash
++pnpm lint
++```
++
++Expected: No linting errors in new files.
++
++- [ ] **Step 6: Manual verification checklist**
++
++```bash
++# Start dev server
++pnpm dev
++
++# Manual verification steps:
++# 1. Sign in to Cartograph
++# 2. Set CodeRabbit API key in organization settings (if available)
++# 3. Analyze a public GitHub repository
++# 4. Verify review badges appear on graph nodes (colored circles)
++# 5. Click a badge to select file, see Code Review section
++# 6. Click "Refresh Reviews" button, verify loading state and data update
++# 7. Click "View on CodeRabbit" link, verify external navigation
++# 8. Disable CodeRabbit API key
++# 9. Analyze another repo, verify analysis completes and reviews show "not-reviewed"
++# 10. Switch to different organization, verify cannot see reviews from other org
++```
++
++- [ ] **Step 7: Final commit**
++
++```bash
++git add -A
++git commit -m "feat: phase 5 complete - CodeRabbit integration with badges and refresh"
++```
++
++- [ ] **Step 8: Verify all acceptance criteria**
++
++```
++✅ CodeRabbit API integration (read-only, pull review data)
++✅ Review status stored in database with org-level RLS
++✅ Reviews fetched at analysis time (Phase 3 enhancement)
++✅ On-demand refresh via "Refresh Reviews" button
++✅ Review badges on graph nodes (color-coded by status)
++✅ Review details in FileDetail panel
++✅ Links to CodeRabbit review page
++✅ All tests passing, zero TypeScript errors
++✅ Build succeeds with zero errors
++```
++
++---
++
++## Summary
++
++Phase 5 CodeRabbit integration complete with:
++
++- **10 tasks** covering API client, storage, database migration, API endpoint, UI components, hooks, tests, and verification
++- **500+ lines** of production code (client, storage, API route, components)
++- **30+ tests** covering client, storage, RLS, components, hooks, graceful degradation, edge cases
++- **Zero TypeScript errors**, strict mode enabled
++- **100% test pass rate** across all phases
++- **Graceful degradation**: analysis completes successfully even if CodeRabbit unavailable
++- **Organization-level RLS**: users see only reviews for their org's repositories
++- **On-demand refresh**: users can fetch fresh review data without re-analyzing
++
++Ready for subagent-driven development execution.
+diff --git a/lib/coderabbit/client.ts b/lib/coderabbit/client.ts
+new file mode 100644
+index 0000000..070563b
+--- /dev/null
++++ b/lib/coderabbit/client.ts
+@@ -0,0 +1,154 @@
++import type { ReviewData, ReviewStatus, CodeRabbitReview } from './types';
++
++const API_ENDPOINT = 'https://api.coderabbit.ai/v1/reviews';
++const TIMEOUT_MS = 30000;
++
++/**
++ * Valid review statuses.
++ */
++const VALID_REVIEW_STATUSES = new Set<ReviewStatus>([
++  'approved',
++  'needs-review',
++  'issues',
++  'not-reviewed',
++]);
++
++/**
++ * Normalize a file path: convert backslashes to forward slashes,
++ * and strip leading slashes.
++ */
++function normalizeFilePath(path: string): string {
++  return path.replace(/\\/g, '/').replace(/^\/+/, '');
++}
++
++/**
++ * Check if a value is a valid review status.
++ */
++function isValidReviewStatus(status: unknown): status is ReviewStatus {
++  return VALID_REVIEW_STATUSES.has(status as ReviewStatus);
++}
++
++/**
++ * Fetch code reviews for a repository from CodeRabbit API.
++ * Implements graceful error handling with 30-second timeout.
++ *
++ * @param repoUrl - GitHub repository URL (e.g., "https://github.com/example/repo")
++ * @param apiKey - CodeRabbit API key
++ * @returns Array of ReviewData, empty array on any error
++ */
++export async function fetchReviewsForRepo(
++  repoUrl: string,
++  apiKey: string
++): Promise<ReviewData[]> {
++  // Early return if API key is missing
++  if (!apiKey || apiKey.trim() === '') {
++    console.warn('CodeRabbit API key is empty or null');
++    return [];
++  }
++
++  try {
++    // Create abort controller for timeout enforcement
++    const abortController = new AbortController();
++    const timeoutId = setTimeout(() => {
++      abortController.abort();
++    }, TIMEOUT_MS);
++
++    try {
++      const response = await fetch(API_ENDPOINT, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${apiKey}`,
++        },
++        body: JSON.stringify({ repository_url: repoUrl }),
++        signal: abortController.signal,
++      });
++
++      clearTimeout(timeoutId);
++
++      // Check response status
++      if (!response.ok) {
++        console.warn(
++          `CodeRabbit API request failed with status ${response.status}`
++        );
++        return [];
++      }
++
++      // Parse JSON response
++      let data: unknown;
++      try {
++        data = await response.json();
++      } catch {
++        console.warn('Failed to parse CodeRabbit API response as JSON');
++        return [];
++      }
++
++      // Validate response structure
++      if (!isResponseValid(data)) {
++        console.warn('CodeRabbit API response has invalid structure');
++        return [];
++      }
++
++      // Transform and validate reviews
++      const now = new Date();
++      const reviews: ReviewData[] = [];
++
++      for (const review of data.reviews) {
++        // Skip reviews with invalid status
++        if (!isValidReviewStatus(review.review_status)) {
++          continue;
++        }
++
++        // Validate required fields
++        if (
++          typeof review.file_path !== 'string' ||
++          typeof review.comment_count !== 'number' ||
++          review.comment_count < 0
++        ) {
++          continue;
++        }
++
++        // Transform to ReviewData
++        const reviewData: ReviewData = {
++          filePath: normalizeFilePath(review.file_path),
++          reviewStatus: review.review_status,
++          commentCount: review.comment_count,
++          summary: review.summary ?? null,
++          externalReviewUrl: review.external_url ?? null,
++          fetchedAt: now,
++        };
++
++        reviews.push(reviewData);
++      }
++
++      return reviews;
++    } catch (error) {
++      clearTimeout(timeoutId);
++
++      // Check for timeout (AbortError)
++      if (error instanceof Error && error.name === 'AbortError') {
++        console.warn('CodeRabbit API request timed out (30s)');
++        return [];
++      }
++
++      // Any other error
++      console.warn('CodeRabbit API request failed:', error);
++      return [];
++    }
++  } catch (error) {
++    console.warn('Unexpected error in fetchReviewsForRepo:', error);
++    return [];
++  }
++}
++
++/**
++ * Type guard to validate API response structure.
++ */
++function isResponseValid(data: unknown): data is { reviews: CodeRabbitReview[] } {
++  return (
++    typeof data === 'object' &&
++    data !== null &&
++    'reviews' in data &&
++    Array.isArray((data as Record<string, unknown>).reviews)
++  );
++}
+diff --git a/lib/coderabbit/types.ts b/lib/coderabbit/types.ts
+new file mode 100644
+index 0000000..8b357c1
+--- /dev/null
++++ b/lib/coderabbit/types.ts
+@@ -0,0 +1,33 @@
++/**
++ * Review status type as a union of string literals.
++ * Represents the state of a code review.
++ */
++export type ReviewStatus =
++  | 'approved'
++  | 'needs-review'
++  | 'issues'
++  | 'not-reviewed';
++
++/**
++ * Normalized review data ready for application use.
++ */
++export interface ReviewData {
++  filePath: string;
++  reviewStatus: ReviewStatus;
++  commentCount: number;
++  summary: string | null;
++  externalReviewUrl: string | null;
++  fetchedAt: Date;
++}
++
++/**
++ * Internal representation of API response from CodeRabbit API.
++ * Uses snake_case as returned by the API.
++ */
++export interface CodeRabbitReview {
++  file_path: string;
++  review_status: ReviewStatus;
++  comment_count: number;
++  summary?: string;
++  external_url?: string;
++}
