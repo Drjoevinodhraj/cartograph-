@@ -1,7 +1,5 @@
-// @ts-nocheck
 // A React component with alias import and dynamic import
 import { Item } from '@/lib/types';
-
 export async function loadPlugin(): Promise<unknown> {
   const plugin = await import('./plugin');
   return plugin;

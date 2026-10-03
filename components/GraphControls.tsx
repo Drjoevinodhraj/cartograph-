@@ -23,6 +23,17 @@ export function GraphControls({
     'hierarchical'
   );
 
+  const applyDarkMode = (isDark: boolean) => {
+    const root = document.documentElement;
+    if (isDark) {
+      root.classList.add('dark');
+      root.style.colorScheme = 'dark';
+    } else {
+      root.classList.remove('dark');
+      root.style.colorScheme = 'light';
+    }
+  };
+
   // Initialize dark mode from localStorage and system preference
   useEffect(() => {
     const savedDarkMode = localStorage.getItem('cartograph-dark-mode');
@@ -40,16 +51,6 @@ export function GraphControls({
     }
   }, []);
 
-  const applyDarkMode = (isDark: boolean) => {
-    const root = document.documentElement;
-    if (isDark) {
-      root.classList.add('dark');
-      root.style.colorScheme = 'dark';
-    } else {
-      root.classList.remove('dark');
-      root.style.colorScheme = 'light';
-    }
-  };
 
   const handleDarkModeToggle = () => {
     const newDarkMode = !isDarkMode;

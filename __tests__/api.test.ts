@@ -1,4 +1,8 @@
 /**
+ * @jest-environment node
+ */
+
+/**
  * __tests__/api.test.ts
  *
  * Integration tests for the Phase 3 API routes:

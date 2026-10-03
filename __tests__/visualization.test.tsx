@@ -4,6 +4,7 @@ import { ReactFlowProvider } from 'reactflow';
 import { DependencyGraph } from '@/components/DependencyGraph';
 import { FileDetail } from '@/components/FileDetail';
 import type { File, Edge } from '@/hooks/useAnalysis';
+import type { ReviewData } from '@/lib/coderabbit/types';
 
 // Mock data
 const mockFiles: File[] = [
@@ -482,7 +483,7 @@ describe('DependencyGraph Review Badges', () => {
   });
 
   test('nodes without reviews do not show badge', () => {
-    const filesWithoutReviews = new Map<string, any>();
+    const filesWithoutReviews = new Map<string, ReviewData>();
     expect(filesWithoutReviews.get('next.config.ts')).toBeUndefined();
   });
 

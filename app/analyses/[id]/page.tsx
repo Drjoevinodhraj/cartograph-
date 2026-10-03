@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { use, useState } from 'react';
 import { DependencyGraph } from '@/components/DependencyGraph';
 import { GraphControls } from '@/components/GraphControls';
@@ -30,7 +31,7 @@ export default function AnalysisPage({ params }: AnalysisPageProps) {
     resolvedParams.id
   );
 
-  const { nodes, edges } = useGraphLayout(
+  const { nodes } = useGraphLayout(
     analysis?.fileList || [],
     analysis?.edgeList || [],
     fileDetail.selectedFile,
@@ -61,12 +62,12 @@ export default function AnalysisPage({ params }: AnalysisPageProps) {
               {analysisError?.message || 'The analysis could not be found or loaded.'}
             </p>
           </div>
-          <a
+          <Link
             href="/analyses"
             className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
           >
             Back to analyses
-          </a>
+          </Link>
         </div>
       </div>
     );

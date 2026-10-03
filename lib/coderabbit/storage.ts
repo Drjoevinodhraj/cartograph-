@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ReviewData, ReviewStatus } from './types';
-
 // Lazy-load Supabase client to allow mocking in tests
-let supabase: any = null;
+let supabase: SupabaseClient | null = null;
 
 function getSupabaseClient() {
   if (!supabase) {
@@ -15,7 +15,7 @@ function getSupabaseClient() {
 }
 
 // For testing: allow injecting a mock client
-export function _setSupabaseClient(client: any) {
+export function _setSupabaseClient(client: SupabaseClient | null) {
   supabase = client;
 }
 
@@ -28,14 +28,14 @@ const PGRST_NOT_FOUND = 'PGRST116';
  * Maps a database row to ReviewData type.
  * Handles type conversions: ISO string dates → Date objects, snake_case → camelCase.
  */
-function mapRowToReviewData(row: any): ReviewData {
+function mapRowToReviewData(row: Record<string, unknown>): ReviewData {
   return {
-    filePath: row.file_path,
+    filePath: row.file_path as string,
     reviewStatus: row.review_status as ReviewStatus,
-    commentCount: row.comment_count || 0,
-    summary: row.summary || null,
-    externalReviewUrl: row.external_review_url || null,
-    fetchedAt: new Date(row.fetched_at),
+    commentCount: (row.comment_count as number) || 0,
+    summary: (row.summary as string | null) || null,
+    externalReviewUrl: (row.external_review_url as string | null) || null,
+    fetchedAt: new Date(row.fetched_at as string),
   };
 }
 

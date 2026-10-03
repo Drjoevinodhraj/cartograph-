@@ -217,7 +217,7 @@ describe('CodeRabbit Storage', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
     const createFluentMock = () => {
-      const fluentMock: any = {
+      const fluentMock: Record<string, unknown> = {
         eq: jest.fn(function() { return this; }),
         select: jest.fn(function() { return this; }),
         single: jest.fn(() => Promise.resolve({ data: null, error: null })),
@@ -230,7 +230,7 @@ describe('CodeRabbit Storage', () => {
       from: jest.fn(() => createFluentMock()),
     };
 
-    _setSupabaseClient(mockClient);
+    _setSupabaseClient(mockClient as any);
   });
 
   afterEach(() => {

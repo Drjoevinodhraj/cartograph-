@@ -17,6 +17,13 @@ import 'reactflow/dist/style.css'
 import dagre from 'dagre'
 import type { ReviewData } from '@/lib/coderabbit/types'
 
+type CustomNode = Node & {
+  data: {
+    label: string;
+    review?: ReviewData;
+    onSelectFile?: (id: string) => void;
+  };
+};
 export type DependencyGraphProps = {
   files: Array<{
     path: string
@@ -59,7 +66,7 @@ function getBadgeColorByStatus(status: string): string {
 
 // Custom node component with review badge
 const CustomNode = React.memo(
-  ({ data, id, selected }: any) => {
+  ({ data, id }: CustomNode) => {
     const review = data.review as ReviewData | undefined
     const badgeColor = review ? getBadgeColorByStatus(review.reviewStatus) : undefined
     const tooltipText = review
@@ -256,7 +263,7 @@ export const DependencyGraph: React.FC<DependencyGraphProps> = ({
     [onSelectFile],
   )
 
-  const nodeTypes = useMemo(() => ({ default: CustomNode }), [])
+  const nodeTypes = useMemo(() => ({ default: CustomNode as React.FC<any> }), [])
 
   return (
     <div style={{ width: '100%', height: '100%', minHeight: '400px' }}>

@@ -46,7 +46,7 @@ const createChain = () => {
       select: jest.fn(() => ({
         single: jest.fn(() => Promise.resolve(mockUpsertSelectResult)),
       })),
-      onConflict: undefined as any,
+      onConflict: undefined as unknown,
     })),
   };
   return chain;
