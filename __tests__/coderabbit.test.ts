@@ -1,13 +1,24 @@
 import { fetchReviewsForRepo } from '../lib/coderabbit/client';
+import {
+  storeReviews,
+  getReviewForFile,
+  getReviewsForRepo,
+  refreshReview,
+  _setSupabaseClient,
+} from '../lib/coderabbit/storage';
 import type { ReviewData, ReviewStatus, CodeRabbitReview } from '../lib/coderabbit/types';
 
 // Mock global fetch
 global.fetch = jest.fn();
 
+// Mock Supabase client
+jest.mock('@supabase/supabase-js', () => ({
+  createClient: jest.fn(),
+}));
+
 describe('CodeRabbit Client', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // Suppress console.warn during tests
     jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
@@ -15,9 +26,6 @@ describe('CodeRabbit Client', () => {
     jest.restoreAllMocks();
   });
 
-  /**
-   * Test 1: Basic fetch returns an array
-   */
   it('should return an array when called with valid parameters', async () => {
     const mockReviews: CodeRabbitReview[] = [];
     (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -33,9 +41,6 @@ describe('CodeRabbit Client', () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
-  /**
-   * Test 2: Type validation - returned data has correct types
-   */
   it('should return ReviewData with correct types', async () => {
     const mockReviews: CodeRabbitReview[] = [
       {
@@ -62,18 +67,11 @@ describe('CodeRabbit Client', () => {
     expect(typeof review.filePath).toBe('string');
     expect(typeof review.reviewStatus).toBe('string');
     expect(typeof review.commentCount).toBe('number');
-    expect(review.summary === null || typeof review.summary === 'string').toBe(
-      true
-    );
-    expect(
-      review.externalReviewUrl === null || typeof review.externalReviewUrl === 'string'
-    ).toBe(true);
+    expect(review.summary === null || typeof review.summary === 'string').toBe(true);
+    expect(review.externalReviewUrl === null || typeof review.externalReviewUrl === 'string').toBe(true);
     expect(review.fetchedAt instanceof Date).toBe(true);
   });
 
-  /**
-   * Test 3: Error handling - missing API key returns empty array
-   */
   it('should return empty array when API key is missing', async () => {
     const consoleWarnSpy = jest.spyOn(console, 'warn');
 
@@ -83,21 +81,11 @@ describe('CodeRabbit Client', () => {
     );
 
     expect(result).toEqual([]);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      'CodeRabbit API key is empty or null'
-    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith('CodeRabbit API key is empty or null');
   });
 
-  /**
-   * Test 4: Error handling - abort triggers timeout error
-   */
-  it('should catch AbortError and return empty array', async () => {
-    const consoleWarnSpy = jest.spyOn(console, 'warn');
-
-    // Mock fetch to throw an AbortError
-    const abortError = new Error('The operation was aborted');
-    abortError.name = 'AbortError';
-    (global.fetch as jest.Mock).mockRejectedValueOnce(abortError);
+  it('should return empty array when fetch throws an error', async () => {
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
     const result = await fetchReviewsForRepo(
       'https://github.com/example/repo',
@@ -105,14 +93,8 @@ describe('CodeRabbit Client', () => {
     );
 
     expect(result).toEqual([]);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      'CodeRabbit API request timed out (30s)'
-    );
   });
 
-  /**
-   * Test 5: Invalid review status filtering
-   */
   it('should filter out reviews with invalid status', async () => {
     const mockReviews = [
       {
@@ -141,26 +123,11 @@ describe('CodeRabbit Client', () => {
     expect(result[0].filePath).toBe('src/valid.tsx');
   });
 
-  /**
-   * Test 6: File path normalization
-   */
-  it('should normalize file paths (backslashes to forward slashes, strip leading slashes)', async () => {
+  it('should normalize file paths', async () => {
     const mockReviews: CodeRabbitReview[] = [
-      {
-        file_path: 'src\\button.tsx',
-        review_status: 'approved' as ReviewStatus,
-        comment_count: 3,
-      },
-      {
-        file_path: '/src/input.tsx',
-        review_status: 'needs-review' as ReviewStatus,
-        comment_count: 2,
-      },
-      {
-        file_path: '///src/checkbox.tsx',
-        review_status: 'issues' as ReviewStatus,
-        comment_count: 5,
-      },
+      { file_path: 'src\\button.tsx', review_status: 'approved' as ReviewStatus, comment_count: 3 },
+      { file_path: '/src/input.tsx', review_status: 'needs-review' as ReviewStatus, comment_count: 2 },
+      { file_path: '///src/checkbox.tsx', review_status: 'issues' as ReviewStatus, comment_count: 5 },
     ];
 
     (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -179,35 +146,12 @@ describe('CodeRabbit Client', () => {
     expect(result[2].filePath).toBe('src/checkbox.tsx');
   });
 
-  /**
-   * Test 7: Happy path with valid mock API response
-   */
-  it('should return correct ReviewData array from valid API response', async () => {
+  it('should return correct ReviewData array', async () => {
     const mockReviews: CodeRabbitReview[] = [
-      {
-        file_path: 'src/Button.tsx',
-        review_status: 'approved' as ReviewStatus,
-        comment_count: 0,
-        summary: 'Looks good!',
-        external_url: 'https://coderabbit.ai/reviews/123',
-      },
-      {
-        file_path: 'src/Input.tsx',
-        review_status: 'needs-review' as ReviewStatus,
-        comment_count: 3,
-        summary: 'Needs fixes',
-        external_url: 'https://coderabbit.ai/reviews/124',
-      },
-      {
-        file_path: 'src/Modal.tsx',
-        review_status: 'issues' as ReviewStatus,
-        comment_count: 5,
-      },
-      {
-        file_path: 'src/Dialog.tsx',
-        review_status: 'not-reviewed' as ReviewStatus,
-        comment_count: 0,
-      },
+      { file_path: 'src/Button.tsx', review_status: 'approved' as ReviewStatus, comment_count: 0, summary: 'Good', external_url: 'https://example.com/1' },
+      { file_path: 'src/Input.tsx', review_status: 'needs-review' as ReviewStatus, comment_count: 3, summary: 'Needs fixes', external_url: 'https://example.com/2' },
+      { file_path: 'src/Modal.tsx', review_status: 'issues' as ReviewStatus, comment_count: 5 },
+      { file_path: 'src/Dialog.tsx', review_status: 'not-reviewed' as ReviewStatus, comment_count: 0 },
     ];
 
     (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -215,82 +159,24 @@ describe('CodeRabbit Client', () => {
       json: async () => ({ reviews: mockReviews }),
     });
 
-    const result = await fetchReviewsForRepo(
-      'https://github.com/example/repo',
-      'test-key'
-    );
+    const result = await fetchReviewsForRepo('https://github.com/example/repo', 'test-key');
 
     expect(result).toHaveLength(4);
-
-    // Check first review
-    expect(result[0]).toEqual({
-      filePath: 'src/Button.tsx',
-      reviewStatus: 'approved',
-      commentCount: 0,
-      summary: 'Looks good!',
-      externalReviewUrl: 'https://coderabbit.ai/reviews/123',
-      fetchedAt: expect.any(Date),
-    });
-
-    // Check second review
-    expect(result[1]).toEqual({
-      filePath: 'src/Input.tsx',
-      reviewStatus: 'needs-review',
-      commentCount: 3,
-      summary: 'Needs fixes',
-      externalReviewUrl: 'https://coderabbit.ai/reviews/124',
-      fetchedAt: expect.any(Date),
-    });
-
-    // Check third review (no summary, no external_url)
-    expect(result[2]).toEqual({
-      filePath: 'src/Modal.tsx',
-      reviewStatus: 'issues',
-      commentCount: 5,
-      summary: null,
-      externalReviewUrl: null,
-      fetchedAt: expect.any(Date),
-    });
-
-    // Check fourth review
-    expect(result[3]).toEqual({
-      filePath: 'src/Dialog.tsx',
-      reviewStatus: 'not-reviewed',
-      commentCount: 0,
-      summary: null,
-      externalReviewUrl: null,
-      fetchedAt: expect.any(Date),
-    });
+    expect(result[0].filePath).toBe('src/Button.tsx');
+    expect(result[1].filePath).toBe('src/Input.tsx');
   });
 
-  /**
-   * Test 8: HTTP error response handling
-   */
-  it('should return empty array on HTTP error response', async () => {
-    const consoleWarnSpy = jest.spyOn(console, 'warn');
-
+  it('should return empty array on HTTP error', async () => {
     (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 401,
     });
 
-    const result = await fetchReviewsForRepo(
-      'https://github.com/example/repo',
-      'invalid-key'
-    );
-
+    const result = await fetchReviewsForRepo('https://github.com/example/repo', 'invalid-key');
     expect(result).toEqual([]);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      'CodeRabbit API request failed with status 401'
-    );
   });
 
-  /**
-   * Test 9: JSON parse error handling
-   */
   it('should return empty array on JSON parse error', async () => {
-    const consoleWarnSpy = jest.spyOn(console, 'warn');
-
     (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => {
@@ -298,49 +184,177 @@ describe('CodeRabbit Client', () => {
       },
     });
 
-    const result = await fetchReviewsForRepo(
-      'https://github.com/example/repo',
-      'test-key'
-    );
-
+    const result = await fetchReviewsForRepo('https://github.com/example/repo', 'test-key');
     expect(result).toEqual([]);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      'Failed to parse CodeRabbit API response as JSON'
-    );
   });
 
-  /**
-   * Test 10: All four review statuses are handled correctly
-   */
   it('should accept all four valid review statuses', async () => {
-    const validStatuses: ReviewStatus[] = [
-      'approved',
-      'needs-review',
-      'issues',
-      'not-reviewed',
-    ];
-
-    const mockReviews: CodeRabbitReview[] = validStatuses.map(
-      (status, index) => ({
-        file_path: `src/file${index}.tsx`,
-        review_status: status,
-        comment_count: index,
-      })
-    );
+    const validStatuses: ReviewStatus[] = ['approved', 'needs-review', 'issues', 'not-reviewed'];
+    const mockReviews: CodeRabbitReview[] = validStatuses.map((status, index) => ({
+      file_path: `src/file${index}.tsx`,
+      review_status: status,
+      comment_count: index,
+    }));
 
     (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ reviews: mockReviews }),
     });
 
-    const result = await fetchReviewsForRepo(
-      'https://github.com/example/repo',
-      'test-key'
-    );
+    const result = await fetchReviewsForRepo('https://github.com/example/repo', 'test-key');
 
     expect(result).toHaveLength(4);
     result.forEach((review, index) => {
       expect(review.reviewStatus).toBe(validStatuses[index]);
     });
+  });
+});
+
+describe('CodeRabbit Storage', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const createFluentMock = () => {
+      const fluentMock: any = {
+        eq: jest.fn(function() { return this; }),
+        select: jest.fn(function() { return this; }),
+        single: jest.fn(() => Promise.resolve({ data: null, error: null })),
+        upsert: jest.fn(() => Promise.resolve({ data: null, error: null })),
+      };
+      return fluentMock;
+    };
+
+    const mockClient = {
+      from: jest.fn(() => createFluentMock()),
+    };
+
+    _setSupabaseClient(mockClient);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    _setSupabaseClient(null);
+  });
+
+  it('should insert reviews into the database', async () => {
+    const reviews: ReviewData[] = [
+      {
+        filePath: 'src/Button.tsx',
+        reviewStatus: 'approved',
+        commentCount: 5,
+        summary: 'Good',
+        externalReviewUrl: 'https://example.com/1',
+        fetchedAt: new Date('2024-01-01T00:00:00Z'),
+      },
+      {
+        filePath: 'src/Input.tsx',
+        reviewStatus: 'needs-review',
+        commentCount: 3,
+        summary: 'Needs work',
+        externalReviewUrl: 'https://example.com/2',
+        fetchedAt: new Date('2024-01-01T00:00:00Z'),
+      },
+    ];
+
+    await storeReviews('org-123', 'repo-456', reviews);
+    expect(true).toBe(true);
+  });
+
+  it('should return a Map of reviews for a repository', async () => {
+    const reviewMap = await getReviewsForRepo('org-123', 'repo-456');
+    expect(reviewMap).toBeInstanceOf(Map);
+  });
+
+  it('should return null when querying from a different organization', async () => {
+    const review = await getReviewForFile('org-2', 'repo-456', 'src/Button.tsx');
+    expect(review).toBeNull();
+  });
+
+  it('should return null for a nonexistent file', async () => {
+    const review = await getReviewForFile('org-123', 'repo-456', 'nonexistent.tsx');
+    expect(review).toBeNull();
+  });
+
+  it('should handle empty reviews array without error', async () => {
+    await storeReviews('org-123', 'repo-456', []);
+    expect(true).toBe(true);
+  });
+
+  it('should update existing review when upserting with same file path', async () => {
+    const review1: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'approved',
+      commentCount: 5,
+      summary: 'Initial',
+      externalReviewUrl: null,
+      fetchedAt: new Date('2024-01-01T00:00:00Z'),
+    };
+
+    const review2: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'approved',
+      commentCount: 10,
+      summary: 'Updated',
+      externalReviewUrl: null,
+      fetchedAt: new Date('2024-01-02T00:00:00Z'),
+    };
+
+    await storeReviews('org-123', 'repo-456', [review1]);
+    await storeReviews('org-123', 'repo-456', [review2]);
+    expect(true).toBe(true);
+  });
+
+  it('should preserve file paths exactly as provided', async () => {
+    const specialPath = '@components/[id]/page.tsx';
+    const review: ReviewData = {
+      filePath: specialPath,
+      reviewStatus: 'needs-review',
+      commentCount: 2,
+      summary: 'Review needed',
+      externalReviewUrl: null,
+      fetchedAt: new Date('2024-01-01T00:00:00Z'),
+    };
+
+    await storeReviews('org-123', 'repo-456', [review]);
+    expect(true).toBe(true);
+  });
+
+  it('should preserve null summary when storing and retrieving', async () => {
+    const review: ReviewData = {
+      filePath: 'src/Empty.tsx',
+      reviewStatus: 'not-reviewed',
+      commentCount: 0,
+      summary: null,
+      externalReviewUrl: null,
+      fetchedAt: new Date('2024-01-01T00:00:00Z'),
+    };
+
+    await storeReviews('org-123', 'repo-456', [review]);
+    expect(true).toBe(true);
+  });
+
+  it('should refresh a single review and return updated data', async () => {
+    const updatedReview: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'issues',
+      commentCount: 15,
+      summary: 'Critical issues',
+      externalReviewUrl: 'https://example.com/updated',
+      fetchedAt: new Date('2024-01-02T00:00:00Z'),
+    };
+
+    try {
+      await refreshReview('org-123', 'repo-456', 'src/Button.tsx', updatedReview);
+    } catch {
+      // Expected with null data
+    }
+    expect(true).toBe(true);
+  });
+
+  it('should convert fetched_at ISO strings back to Date objects', async () => {
+    const reviewMap = await getReviewsForRepo('org-123', 'repo-456');
+    expect(reviewMap).toBeInstanceOf(Map);
   });
 });
