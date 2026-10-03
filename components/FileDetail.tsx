@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, ExternalLink, RefreshCw } from 'lucide-react';
+import type { ReviewData } from '@/lib/coderabbit/types';
 
 interface FileDetailProps {
   selectedFile: string | null;
@@ -16,6 +17,9 @@ interface FileDetailProps {
   onLoadExplanation?: (filePath: string) => Promise<void>;
   explanation?: string | null;
   isLoadingExplanation?: boolean;
+  reviewData?: ReviewData | null;
+  onRefreshReview?: (filePath: string) => void;
+  isRefreshingReview?: boolean;
 }
 
 const kindColors: Record<string, { bg: string; text: string }> = {
@@ -83,6 +87,27 @@ function CollapsibleSection({ title, count, items }: CollapsibleSectionProps) {
   );
 }
 
+function getBadgeColorByStatus(status: string): string {
+  switch (status) {
+    case 'approved':
+      return 'bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-300';
+    case 'needs-review':
+      return 'bg-yellow-100 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-300';
+    case 'issues':
+      return 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300';
+    case 'not-reviewed':
+    default:
+      return 'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300';
+  }
+}
+
+function formatStatusText(status: string): string {
+  return status
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 export function FileDetail({
   selectedFile,
   fileKind,
@@ -93,6 +118,9 @@ export function FileDetail({
   onLoadExplanation,
   explanation,
   isLoadingExplanation,
+  reviewData,
+  onRefreshReview,
+  isRefreshingReview,
 }: FileDetailProps) {
   const [explanationRequested, setExplanationRequested] = useState(false);
 
@@ -189,6 +217,71 @@ export function FileDetail({
               items={neighbors.in}
             />
           </div>
+        </div>
+
+        {/* Code Review */}
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+            Code Review
+          </h3>
+
+          {isRefreshingReview && (
+            <div className="flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 py-4">
+              <Loader2 size={14} className="animate-spin" />
+              <span className="text-xs">Fetching review data...</span>
+            </div>
+          )}
+
+          {!reviewData && !isRefreshingReview && (
+            <div className="text-xs text-gray-600 dark:text-gray-400 p-2 bg-gray-50 dark:bg-slate-900 rounded border border-gray-200 dark:border-slate-800">
+              No review yet
+            </div>
+          )}
+
+          {reviewData && !isRefreshingReview && (
+            <div className="space-y-2">
+              {/* Status Badge */}
+              <div className={`inline-block px-2 py-1 rounded text-xs font-medium ${getBadgeColorByStatus(reviewData.reviewStatus)}`}>
+                {formatStatusText(reviewData.reviewStatus)}
+              </div>
+
+              {/* Comment Count */}
+              <div className="text-xs text-gray-600 dark:text-gray-400">
+                <span className="font-semibold">{reviewData.commentCount}</span> comment{reviewData.commentCount !== 1 ? 's' : ''}
+              </div>
+
+              {/* Summary */}
+              {reviewData.summary && (
+                <div className="text-xs text-gray-700 dark:text-gray-300 p-2 bg-gray-50 dark:bg-slate-900 rounded border border-gray-200 dark:border-slate-800">
+                  {reviewData.summary}
+                </div>
+              )}
+
+              {/* Links and Actions */}
+              <div className="flex flex-col gap-2">
+                {reviewData.externalReviewUrl && (
+                  <a
+                    href={reviewData.externalReviewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    <ExternalLink size={12} />
+                    View on CodeRabbit
+                  </a>
+                )}
+
+                <button
+                  onClick={() => onRefreshReview?.(selectedFile!)}
+                  disabled={isRefreshingReview}
+                  className="w-full px-2 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-slate-900 hover:bg-gray-200 dark:hover:bg-slate-800 disabled:bg-gray-200 dark:disabled:bg-slate-800 rounded border border-gray-200 dark:border-slate-800 transition-colors flex items-center justify-center gap-1"
+                >
+                  <RefreshCw size={12} className={isRefreshingReview ? 'animate-spin' : ''} />
+                  Refresh Reviews
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Explanation */}
