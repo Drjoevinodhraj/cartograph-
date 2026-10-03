@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { File, Edge } from './useAnalysis';
+import type { File, Edge, ReviewData } from './useAnalysis';
 
 interface FileDetailState {
   selectedFile: string | null;
@@ -13,6 +13,12 @@ interface FileDetailState {
   };
   explanation: string | null;
   isLoadingExplanation: boolean;
+  reviewData: ReviewData | null;
+  isRefreshingReview: boolean;
+}
+
+interface UseFileDetailOptions {
+  reviews?: Map<string, ReviewData>;
 }
 
 /**
@@ -94,14 +100,18 @@ function getNeighbors(
 export function useFileDetail(
   files: File[],
   edges: Edge[],
-  analysisId: string
+  analysisId: string,
+  options?: UseFileDetailOptions
 ): FileDetailState & {
   setSelectedFile: (filePath: string | null) => void;
   loadExplanation: (filePath: string) => Promise<void>;
+  refreshReview: (filePath: string) => Promise<void>;
 } {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [explanation, setExplanation] = useState<string | null>(null);
   const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
+  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
+  const [isRefreshingReview, setIsRefreshingReview] = useState(false);
 
   // Find the selected file in the files array
   const fileData = selectedFile ? files.find((f) => f.path === selectedFile) : null;
@@ -144,6 +154,46 @@ export function useFileDetail(
     [analysisId]
   );
 
+  const refreshReview = useCallback(
+    async (filePath: string) => {
+      if (!filePath || !analysisId) return;
+
+      setIsRefreshingReview(true);
+
+      try {
+        const response = await fetch('/api/coderabbit/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ analysisId, filePath }),
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to refresh review: ${response.status} ${response.statusText}`
+          );
+        }
+
+        const freshReview: ReviewData = await response.json();
+        setReviewData(freshReview);
+      } catch (err) {
+        console.error('Failed to refresh review:', err);
+      } finally {
+        setIsRefreshingReview(false);
+      }
+    },
+    [analysisId]
+  );
+
+  // Update reviewData when selected file changes
+  useEffect(() => {
+    if (selectedFile && options?.reviews) {
+      const review = options.reviews.get(selectedFile);
+      setReviewData(review || null);
+    } else {
+      setReviewData(null);
+    }
+  }, [selectedFile, options?.reviews]);
+
   // Clear explanation when file changes
   useEffect(() => {
     setExplanation(null);
@@ -158,7 +208,10 @@ export function useFileDetail(
     neighbors,
     explanation,
     isLoadingExplanation,
+    reviewData,
+    isRefreshingReview,
     setSelectedFile,
     loadExplanation,
+    refreshReview,
   };
 }
