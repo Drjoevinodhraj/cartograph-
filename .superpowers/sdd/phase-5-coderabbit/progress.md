@@ -54,23 +54,23 @@ No conflicts found. Proceeding.
 **Status:** COMPLETE (commit 07075f4, 9/9 integration tests + 20/20 regression tests)
 
 ### Task 5: API Endpoint
-- [ ] Step 1: Write refresh endpoint tests
-- [ ] Step 2: Create route handler
-- [ ] Step 3: Run endpoint tests
+- [x] Step 1: Write refresh endpoint tests
+- [x] Step 2: Create route handler
+- [x] Step 3: Run endpoint tests
 - [x] Step 4: Test manually
 - [x] Step 5: Commit
 
 **Status:** COMPLETE (commit 9433fbc, 12 endpoint tests, 32 total tests passing)
 
 ### Task 6: DependencyGraph Component
-- [ ] Step 1: Write badge tests
-- [ ] Step 2: Read current component
-- [ ] Step 3: Add reviews prop
-- [ ] Step 4: Implement badge rendering
-- [ ] Step 5: Run component tests
-- [ ] Step 6: Commit
+- [x] Step 1: Write badge tests
+- [x] Step 2: Read current component
+- [x] Step 3: Add reviews prop
+- [x] Step 4: Implement badge rendering
+- [x] Step 5: Run component tests
+- [x] Step 6: Commit
 
-**Status:** PENDING
+**Status:** COMPLETE (commit f6369d1, 54/54 visualization tests, 86/86 total component tests)
 
 ### Task 7: FileDetail Component
 - [ ] Step 1: Write Code Review section tests
@@ -121,3 +121,18 @@ No conflicts found. Proceeding.
 - Workspace: .superpowers/sdd/phase-5-coderabbit/
 - 10 tasks, clear dependencies, mechanical implementation throughout
 - Model recommendation: Haiku for Tasks 1-9 (complete code specs), Sonnet for final review
+
+## Test Summary
+
+- **Task 1-5 Tests:** 32 CodeRabbit tests (client, storage, endpoint) ✓ PASSING
+- **Task 6 Tests:** 54 visualization tests (DependencyGraph badge rendering) ✓ PASSING
+- **Total Phase 5 Tests So Far:** 86 tests ✓ PASSING
+
+## Component Status
+
+- DependencyGraph: Updated with reviews prop and badge rendering
+- Badge colors: Green (approved), Yellow (needs-review), Red (issues), Gray (not-reviewed)
+- Badge position: Bottom-right corner of node (18px circle)
+- Tooltip: Hover shows "Review: {status} ({count} comments)"
+- Interactivity: Badge click selects file in graph
+- Backward compatible: Reviews prop optional, defaults to empty Map
