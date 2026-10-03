@@ -13,6 +13,8 @@ import { auth } from '@clerk/nextjs/server';
 import { createClient } from '@supabase/supabase-js';
 import { fetchReviewsForRepo } from '@/lib/coderabbit/client';
 import { refreshReview } from '@/lib/coderabbit/storage';
+import { checkRateLimit, getRemainingRequests, getResetTime } from '@/lib/rate-limit';
+import { isValidFilePath, isValidUUID } from '@/lib/validation';
 import type { ReviewData } from '@/lib/coderabbit/types';
 
 // ---------------------------------------------------------------------------
@@ -96,10 +98,50 @@ export async function POST(request: NextRequest): Promise<Response> {
       filePath: string;
     };
 
+    // 1.5. SECURITY FIX #5: Validate input format
+    const analysisValidation = isValidUUID(analysisId);
+    if (!analysisValidation.valid) {
+      return NextResponse.json(
+        { error: analysisValidation.error },
+        { status: 400 }
+      );
+    }
+
+    const pathValidation = isValidFilePath(filePath);
+    if (!pathValidation.valid) {
+      return NextResponse.json(
+        { error: pathValidation.error },
+        { status: 400 }
+      );
+    }
+
     // 2. Authenticate user
     const { userId } = await auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // 2.5. SECURITY FIX #2: Rate limiting (10 requests per hour per user)
+    const isAllowed = checkRateLimit(userId, 10, 3600000); // 1 hour window
+    if (!isAllowed) {
+      const remaining = getRemainingRequests(userId, 10);
+      const resetTime = getResetTime(userId);
+      return NextResponse.json(
+        {
+          error: 'Too many requests',
+          retryAfter: Math.ceil((resetTime.getTime() - Date.now()) / 1000),
+          remaining: Math.max(0, remaining),
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': Math.ceil((resetTime.getTime() - Date.now()) / 1000).toString(),
+            'X-RateLimit-Limit': '10',
+            'X-RateLimit-Remaining': Math.max(0, remaining).toString(),
+            'X-RateLimit-Reset': resetTime.toISOString(),
+          },
+        }
+      );
     }
 
     const supabase = makeSupabaseClient();

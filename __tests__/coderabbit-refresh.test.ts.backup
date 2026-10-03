@@ -1,0 +1,501 @@
+/**
+import type { NextRequest } from 'next/server';
+ * __tests__/coderabbit-refresh.test.ts
+ *
+ * Integration tests for POST /api/coderabbit/refresh endpoint.
+ * Tests auth, RLS verification, CodeRabbit API integration, and all status codes.
+ *
+ * @jest-environment node
+ *
+ * Strategy:
+ *   - Mock @clerk/nextjs/server to control auth state.
+ *   - Mock @supabase/supabase-js so no real DB calls are made.
+ *   - Mock fetchReviewsForRepo to simulate CodeRabbit API responses.
+ *   - Every test constructs a real Request and inspects the real Response.
+ */
+
+// ---------------------------------------------------------------------------
+// Setup: Environment and module-level mocks
+// ---------------------------------------------------------------------------
+
+process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
+
+// Clerk auth mock: default to authenticated with user.
+const mockAuthState: { userId: string | null; orgId: string | null } = {
+  userId: 'user_test_123',
+  orgId: null,
+};
+
+jest.mock('@clerk/nextjs/server', () => ({
+  auth: jest.fn(() => Promise.resolve(mockAuthState)),
+}));
+
+// Supabase chain mock: reusable builder pattern.
+let mockSingleResult: { data: unknown; error: unknown } = { data: null, error: null };
+let singleResults: Array<{ data: unknown; error: unknown }> = [];
+let singleCallCount = 0;
+
+const supabaseChain: Record<string, unknown> = {};
+const chainSelf = () => supabaseChain;
+
+supabaseChain.from = jest.fn(chainSelf);
+supabaseChain.select = jest.fn(chainSelf);
+supabaseChain.eq = jest.fn(chainSelf);
+supabaseChain.order = jest.fn(chainSelf);
+supabaseChain.single = jest.fn(() => {
+  if (singleResults.length > 0) {
+    const result = singleResults[singleCallCount] ?? singleResults[singleResults.length - 1];
+    singleCallCount++;
+    return Promise.resolve(result);
+  }
+  return Promise.resolve(mockSingleResult);
+});
+supabaseChain.upsert = jest.fn(chainSelf);
+
+jest.mock('@supabase/supabase-js', () => ({
+  createClient: jest.fn(() => supabaseChain),
+}));
+
+// CodeRabbit client mock.
+const mockFetchReviewsForRepo = jest.fn();
+jest.mock('@/lib/coderabbit/client', () => ({
+  fetchReviewsForRepo: (...args: unknown[]) => mockFetchReviewsForRepo(...args),
+}));
+
+// CodeRabbit storage mock.
+const mockRefreshReview = jest.fn();
+jest.mock('@/lib/coderabbit/storage', () => ({
+  refreshReview: (...args: unknown[]) => mockRefreshReview(...args),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports (must come after mocks)
+// ---------------------------------------------------------------------------
+
+import { POST } from '../app/api/coderabbit/refresh/route';
+import type { ReviewData } from '../lib/coderabbit/types';
+
+// ---------------------------------------------------------------------------
+// Test Suite
+// ---------------------------------------------------------------------------
+
+// Valid UUIDs for testing (must pass UUID v4 validation)
+const VALID_UUID_1 = '550e8400-e29b-41d4-a716-446655440000';
+const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001';
+
+describe('POST /api/coderabbit/refresh', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    singleResults = [];
+    singleCallCount = 0;
+    mockSingleResult = { data: null, error: null };
+    mockAuthState.userId = 'user_test_123';
+    mockAuthState.orgId = null;
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('should return 200 with ReviewData on success', async () => {
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: { organization_id: 'org_789' },
+        error: null,
+      },
+      {
+        data: {
+          id: 'repo_456',
+          url: 'https://github.com/example/repo',
+        },
+        error: null,
+      },
+      {
+        data: { coderabbit_api_key: 'test-api-key' },
+        error: null,
+      },
+    ];
+
+    const mockReviewData: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'approved',
+      commentCount: 5,
+      summary: 'Looks good',
+      externalReviewUrl: 'https://example.com/review/1',
+      fetchedAt: new Date(),
+    };
+
+    mockFetchReviewsForRepo.mockResolvedValueOnce([mockReviewData]);
+    mockRefreshReview.mockResolvedValueOnce(mockReviewData);
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filePath).toBe('src/Button.tsx');
+    expect(body.reviewStatus).toBe('approved');
+  });
+
+  it('should return 400 if analysisId is missing', async () => {
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filePath: 'src/Button.tsx' }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Missing analysisId or filePath');
+  });
+
+  it('should return 400 if filePath is missing', async () => {
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ analysisId: 'analysis_123' }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Missing analysisId or filePath');
+  });
+
+  it('should return 400 if both are missing', async () => {
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Missing analysisId or filePath');
+  });
+
+  it('should return 400 if JSON body is invalid', async () => {
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not valid json {',
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid JSON body');
+  });
+
+  it('should return 401 if user is not authenticated', async () => {
+    mockAuthState.userId = null;
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('should return 404 if analysis is not found', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: null,
+        error: { code: 'PGRST116' },
+      },
+    ];
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'nonexistent_analysis',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error).toBe('Analysis not found');
+  });
+
+  it('should return 403 if user is not in the analysis organization', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: null,
+        error: { code: 'PGRST116' },
+      },
+    ];
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error).toBe('Unauthorized - not in organization');
+  });
+
+  it('should return 503 if CodeRabbit API key is not configured', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: { organization_id: 'org_789' },
+        error: null,
+      },
+      {
+        data: {
+          id: 'repo_456',
+          url: 'https://github.com/example/repo',
+        },
+        error: null,
+      },
+      {
+        data: { coderabbit_api_key: null },
+        error: null,
+      },
+    ];
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error).toBe('CodeRabbit not configured for organization');
+  });
+
+  it('should return 404 if repository is not found', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: { organization_id: 'org_789' },
+        error: null,
+      },
+      {
+        data: null,
+        error: { code: 'PGRST116' },
+      },
+    ];
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error).toBe('Repository not found');
+  });
+
+  it('should create default not-reviewed review if file not in CodeRabbit response', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: { organization_id: 'org_789' },
+        error: null,
+      },
+      {
+        data: {
+          id: 'repo_456',
+          url: 'https://github.com/example/repo',
+        },
+        error: null,
+      },
+      {
+        data: { coderabbit_api_key: 'test-api-key' },
+        error: null,
+      },
+    ];
+
+    mockFetchReviewsForRepo.mockResolvedValueOnce([
+      {
+        filePath: 'src/OtherFile.tsx',
+        reviewStatus: 'approved',
+        commentCount: 3,
+        summary: 'Good',
+        externalReviewUrl: null,
+        fetchedAt: new Date(),
+      },
+    ]);
+
+    const mockDefaultReview: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'not-reviewed',
+      commentCount: 0,
+      summary: null,
+      externalReviewUrl: null,
+      fetchedAt: expect.any(Date),
+    };
+
+    mockRefreshReview.mockResolvedValueOnce(mockDefaultReview);
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.reviewStatus).toBe('not-reviewed');
+    expect(body.commentCount).toBe(0);
+  });
+
+  it('should update database with fresh review from API', async () => {
+    mockAuthState.userId = 'user_test_123';
+
+    singleResults = [
+      {
+        data: {
+          id: 'analysis_123',
+          repositories: {
+            repository_id: 'repo_456',
+            organization_id: 'org_789',
+          },
+        },
+        error: null,
+      },
+      {
+        data: { organization_id: 'org_789' },
+        error: null,
+      },
+      {
+        data: {
+          id: 'repo_456',
+          url: 'https://github.com/example/repo',
+        },
+        error: null,
+      },
+      {
+        data: { coderabbit_api_key: 'test-api-key' },
+        error: null,
+      },
+    ];
+
+    const freshReview: ReviewData = {
+      filePath: 'src/Button.tsx',
+      reviewStatus: 'issues',
+      commentCount: 8,
+      summary: 'Critical issues found',
+      externalReviewUrl: 'https://example.com/review/updated',
+      fetchedAt: new Date(),
+    };
+
+    mockFetchReviewsForRepo.mockResolvedValueOnce([freshReview]);
+    mockRefreshReview.mockResolvedValueOnce(freshReview);
+
+    const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: 'analysis_123',
+        filePath: 'src/Button.tsx',
+      }),
+    });
+
+    const response = await POST(request as any);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.reviewStatus).toBe('issues');
+    expect(body.commentCount).toBe(8);
+  });
+});

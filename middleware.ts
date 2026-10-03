@@ -31,16 +31,20 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   // For protected routes, require authentication.
-  // If the user is not authenticated, Clerk will handle the redirect to /sign-in.
   const { userId } = await auth();
 
-  // If no userId, the user is not authenticated.
-  // Clerk's clerkMiddleware will redirect to /sign-in automatically.
+  // SECURITY FIX #1: Explicit auth check with error handling
   if (!userId) {
-    // This code block will be reached only if the route is not public.
-    // Clerk will handle the redirect before we get here in normal operation.
-    // But we can be explicit: the user must be authenticated to continue.
+    // User is not authenticated on a protected route.
+    // Clerk will redirect to /sign-in, but we log this for security monitoring.
+    console.warn(`[AUTH] Unauthenticated access attempt to protected route: ${req.nextUrl.pathname}`);
     return;
+  }
+
+  // Optional: Add rate limiting check here for API routes
+  // For now, just log successful auth for audit trail
+  if (req.nextUrl.pathname.startsWith('/api')) {
+    console.debug(`[AUTH] API access from user: ${userId} to ${req.nextUrl.pathname}`);
   }
 });
 

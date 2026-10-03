@@ -182,7 +182,7 @@ describe('analyzeRepository — CodeRabbit Integration', () => {
 
     // Should have logged a warning
     expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('[runner] Failed to fetch CodeRabbit reviews'),
+      expect.stringContaining('[runner] CodeRabbit fetch failed'),
       expect.any(String)
     );
   });

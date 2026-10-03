@@ -141,7 +141,9 @@ async function getOrganizationCodeRabbitKey(orgId: string): Promise<string | nul
 /**
  * Fetch CodeRabbit reviews asynchronously (fire-and-forget).
  * This runs after the analysis response is returned, so any delays here don't block the user.
- * Implements 30-second timeout via Promise.race().
+ * Implements 30-second timeout with explicit error handling.
+ *
+ * SECURITY FIX #4: Explicit timeout handling to distinguish timeout from fetch errors.
  *
  * @param repoUrl - Repository URL
  * @param orgId - Organization ID
@@ -154,24 +156,41 @@ function fetchReviewsAsync(
   repoId: string,
   apiKey: string,
 ): void {
-  // Fire-and-forget: don't await, let it run in background
+  // Fire-and-forget: create a timeout error class to distinguish timeouts
+  class TimeoutError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'TimeoutError';
+    }
+  }
+
+  // Race the fetch against a timeout, then handle the result
   Promise.race([
-    fetchReviewsForRepo(repoUrl, apiKey)
-      .then((reviews) => {
-        if (reviews.length > 0) {
-          return storeReviews(orgId, repoId, reviews);
-        }
-      })
-      .catch((error) => {
-        console.warn('[runner] Failed to fetch CodeRabbit reviews:', error instanceof Error ? error.message : String(error));
-      }),
-    new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error('CodeRabbit timeout')), 30000)
+    fetchReviewsForRepo(repoUrl, apiKey),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new TimeoutError('CodeRabbit fetch timed out after 30 seconds')), 30000)
     ),
-  ]).catch((error) => {
-    console.warn('[runner] CodeRabbit review fetch timed out or failed:', error instanceof Error ? error.message : String(error));
-    // Don't fail analysis on CodeRabbit errors — this is non-blocking
-  });
+  ])
+    .then((reviews) => {
+      if (reviews.length > 0) {
+        return storeReviews(orgId, repoId, reviews);
+      }
+    })
+    .then(() => {
+      console.info(`[runner] CodeRabbit reviews processed for repo ${repoId}`);
+    })
+    .catch((error) => {
+      // Distinguish timeout from other errors
+      if (error instanceof TimeoutError) {
+        console.warn('[runner]', error.message);
+      } else {
+        console.warn(
+          '[runner] CodeRabbit fetch failed:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      // Don't fail analysis on CodeRabbit errors — this is non-blocking
+    });
 }
 
 // ---------------------------------------------------------------------------

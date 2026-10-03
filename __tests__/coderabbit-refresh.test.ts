@@ -80,6 +80,10 @@ import type { ReviewData } from '../lib/coderabbit/types';
 // Test Suite
 // ---------------------------------------------------------------------------
 
+// Valid UUIDs for testing (must pass UUID v4 validation)
+const VALID_UUID_1 = '550e8400-e29b-41d4-a716-446655440000';
+const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001';
+
 describe('POST /api/coderabbit/refresh', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -99,7 +103,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -138,8 +142,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -154,6 +159,7 @@ describe('POST /api/coderabbit/refresh', () => {
   it('should return 400 if analysisId is missing', async () => {
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ filePath: 'src/Button.tsx' }),
     });
 
@@ -166,7 +172,8 @@ describe('POST /api/coderabbit/refresh', () => {
   it('should return 400 if filePath is missing', async () => {
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
-      body: JSON.stringify({ analysisId: 'analysis_123' }),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ analysisId: VALID_UUID_1 }),
     });
 
     const response = await POST(request as any);
@@ -178,6 +185,7 @@ describe('POST /api/coderabbit/refresh', () => {
   it('should return 400 if both are missing', async () => {
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({}),
     });
 
@@ -190,6 +198,7 @@ describe('POST /api/coderabbit/refresh', () => {
   it('should return 400 if JSON body is invalid', async () => {
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: 'not valid json {',
     });
 
@@ -204,8 +213,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -228,8 +238,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'nonexistent_analysis',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -246,7 +257,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -262,8 +273,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -280,7 +292,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -307,8 +319,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -325,7 +338,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -345,8 +358,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -363,7 +377,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -412,8 +426,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
@@ -431,7 +446,7 @@ describe('POST /api/coderabbit/refresh', () => {
     singleResults = [
       {
         data: {
-          id: 'analysis_123',
+          id: VALID_UUID_1,
           repositories: {
             repository_id: 'repo_456',
             organization_id: 'org_789',
@@ -470,8 +485,9 @@ describe('POST /api/coderabbit/refresh', () => {
 
     const request = new Request('http://localhost:3000/api/coderabbit/refresh', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        analysisId: 'analysis_123',
+        analysisId: VALID_UUID_1,
         filePath: 'src/Button.tsx',
       }),
     });
